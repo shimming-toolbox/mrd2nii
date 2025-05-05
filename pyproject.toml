@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+dynamic = ["version"]
+name = "mrd2nii"
+dependencies = [
+    "click",
+    "ismrmrd",
+    "nibabel",
+    "pytest"
+]
+requires-python = ">= 3.10"
+authors = [
+  {name = "Alexandre D'Astous"},
+]
+description = "Convert ISMRMRD files to NIfTI format"
+readme = "README.md"
+license = "GPL-3.0-or-later"
+keywords = ["mrd", "ismrmrd", "NIfTI", "nii", "converter"]
+
+[project.urls]
+Repository = "https://github.com/shimming-toolbox/mrd2nii.git"
+
+[project.scripts]
+mrd2nii = "mrd2nii.cli.mrd2nii_cli:mrd2nii_int"
+
+[tool.setuptools.packages.find]
+exclude = ["testing_data", "test*"]
+
+[tool.setuptools.dynamic]
+version = {file = "mrd2nii/version.txt"}
