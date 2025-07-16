@@ -33,26 +33,38 @@ def mrd2nii_dset(dset: ismrmrd.Dataset, output_dir):
 
     # Read images
     files_output = {}
-    for group in [key for key in groups if (key.startswith('image_') or key.startswith('images_'))]:
-        for imgNum in range(0, dset.number_of_images(group)):
-            image = dset.read_image(group, imgNum)
+    for group in groups:
 
-            acq_name = f"{image.getHead().measurement_uid}"
-            acq_name += f"_{metadata.measurementInformation.protocolName}"
+        if group == 'waveforms':
+            process_waveforms(dset, output_dir)
 
-            if image.getHead().image_type == ismrmrd.IMTYPE_MAGNITUDE:
-                acq_name += "_magnitude"
-            elif image.getHead().image_type == ismrmrd.IMTYPE_PHASE:
-                acq_name += "_phase"
-            else:
-                raise NotImplementedError(f"Image type {image.getHead().image_type} not implemented")
+        elif group == 'data':
+            logging.warning("Raw data is not supported yet")
+            # for i_acq in range(0, dset.number_of_acquisitions()):
+            #     pass
+                # acq = dset.read_acquisition(i_acq)
+                # acq.data
 
-            acq_name += f"_echo-{image.getHead().contrast}"
+        elif group.startswith('image_') or group.startswith('images_'):
+            for i_img in range(0, dset.number_of_images(group)):
+                image = dset.read_image(group, i_img)
 
-            if acq_name not in files_output:
-                files_output[acq_name] = []
+                acq_name = f"{image.getHead().measurement_uid}"
+                acq_name += f"_{metadata.measurementInformation.protocolName}"
 
-            files_output[acq_name].append(image)
+                if image.getHead().image_type == ismrmrd.IMTYPE_MAGNITUDE:
+                    acq_name += "_magnitude"
+                elif image.getHead().image_type == ismrmrd.IMTYPE_PHASE:
+                    acq_name += "_phase"
+                else:
+                    raise NotImplementedError(f"Image type {image.getHead().image_type} not implemented")
+
+                acq_name += f"_echo-{image.getHead().contrast}"
+
+                if acq_name not in files_output:
+                    files_output[acq_name] = []
+
+                files_output[acq_name].append(image)
 
     # Create output directory
     os.makedirs(output_dir, exist_ok=True)
@@ -73,6 +85,95 @@ def mrd2nii_dset(dset: ismrmrd.Dataset, output_dir):
         fname_json = os.path.join(output_dir, f"{acq_name}.json")
         with open(fname_json, 'w', encoding='utf-8') as f:
             json.dump(sidecar, f, ensure_ascii=False, indent=4)
+
+
+def process_waveforms(dset, path_output):
+    data_wav = {
+        0: {'name': 'ECG',
+            'data': {'Time_tics': [], 'trace_0': []}
+            },
+        1: {'name': 'PULSE',
+            'data': {'Time_tics': [], 'trace_0': []}
+            },
+        2: {'name': 'RESP',
+            'data': {'Time_tics': [], 'trace_0': []}
+            },
+        3: {'name': 'EXT1',
+            'data': {'Time_tics': [], 'trace_0': []}
+            },
+        4: {'name': 'EXT2',
+            'data': {'Time_tics': [], 'trace_0': []}
+            },
+    }
+
+    # The waveforms come in chunks, we read all of them and store them in a dictionary
+    for i_waveform in range(0, dset.number_of_waveforms()):
+        waveform = dset.read_waveform(i_waveform)
+        wav_header = waveform.getHead()
+        if wav_header.waveform_id not in data_wav:
+            logging.warning(f"Waveform ID {wav_header.waveform_id} not recognized, skipping")
+            continue
+
+        if wav_header.number_of_samples == 0:
+            continue
+
+        # A time_tic is 2.5 ms, so we need to divide by 2.5ms per time_tic
+        time_tic_per_sample = wav_header.sample_time_us / 1000 / 2.5
+        time_tics = np.arange(wav_header.time_stamp, wav_header.time_stamp + (wav_header.number_of_samples * time_tic_per_sample), time_tic_per_sample).astype(int)
+
+        data_wav[wav_header.waveform_id]['data']['Time_tics'].extend(time_tics.tolist())
+
+        for i_channel in range(wav_header.channels):
+            if data_wav[wav_header.waveform_id]['data'].get(f'trace_{i_channel}') is None:
+                data_wav[wav_header.waveform_id]['data'][f'trace_{i_channel}'] = []
+            data_wav[wav_header.waveform_id]['data'][f'trace_{i_channel}'].extend(waveform.data[i_channel, :].tolist())
+
+    # Sort the data so that it is time ordered
+    for wav_id in data_wav:
+        if len(data_wav[wav_id]['data']['Time_tics']) == 0:
+            continue
+
+        n_timepoints = len(data_wav[wav_id]['data']['Time_tics'])
+
+        sorted_indices = np.argsort(data_wav[wav_id]['data']['Time_tics'])
+        for key in data_wav[wav_id]['data']:
+            if len(data_wav[wav_id]['data'][key]) != n_timepoints:
+                raise ValueError(f"Waveform ID {wav_id} has inconsistent data length for key '{key}'.")
+            data_wav[wav_id]['data'][key] = np.array(data_wav[wav_id]['data'][key])[sorted_indices].tolist()
+
+    # Create output directory
+    os.makedirs(path_output, exist_ok=True)
+
+    # Save resp
+    trace_ids = [0]
+    trace_names = ['RESP']
+    fname_output = os.path.join(path_output, f"waveform_RESP.log")
+    save_waveform_log_file(2, trace_ids, trace_names, data_wav, fname_output)
+    # Todo: Save PhysioTriggerTimes
+    # Save Ext1
+    trace_ids = [0]
+    trace_names = ['EXT1']
+    fname_output = os.path.join(path_output, f"waveform_EXT1.log")
+    save_waveform_log_file(3, trace_ids, trace_names, data_wav, fname_output)
+    # Todo: Save ECG
+    # Todo: Save PULSE
+    # Todo: Save Ext2
+
+
+def save_waveform_log_file(logfile_id, trace_ids, trace_names, data_wav, fname_output):
+    wav = data_wav[logfile_id]
+    with open(fname_output, 'w', encoding='utf-8') as f:
+        f.write(f"Time_tics")
+
+        for trace_name in trace_names:
+            f.write(f" {trace_name}")
+        f.write("\n")
+
+        for i_timepoints in range(len(wav['data']['Time_tics'])):
+            f.write(f"{wav['data']['Time_tics'][i_timepoints]}")
+            for i_id in range(len(trace_ids)):
+                f.write(f" {wav['data'][f'trace_{trace_ids[i_id]}'][i_timepoints]}")
+            f.write("\n")
 
 
 def mrd2nii_volume(metadata, volume_images):

@@ -71,6 +71,36 @@ def test_mrd2nii_dset2():
         verify_sidecar(fname_json, fname_expected_json)
 
 
+def test_mrd2nii_dset3():
+    """Test MRD to NIfTI conversion for dataset 2. TRA EPI ROT"""
+
+    with tempfile.TemporaryDirectory(prefix='st_' + pathlib.Path(__file__).stem) as tmp:
+        # Define the path to the MRD file and output directory
+        path_mrd = os.path.join(__dir_testing__, "dset3", "mrd")
+        path_output = tmp
+
+        runner = CliRunner()
+
+        res = runner.invoke(mrd2nii_int,
+                            [
+                                '--input', path_mrd,
+                                '--output', tmp
+                            ],
+                            catch_exceptions=False)
+
+        assert res.exit_code == 0, f"Error: {res.exit_code} - {res.output}"
+        # nii = nib.load(os.path.join(path_output, "160_ep2d_bold_shimming_magnitude_echo-0.nii.gz"))
+        # expected_affine = [[-2.45199919, -7.93683483e-08, 5.05236149, 100.587128],
+        #                    [0.161766902, 2.55949664, 2.60471988, -146.346985],
+        #                    [0.862099826, -0.480271578, 13.8812542, -70.0200882],
+        #                    [0.0, 0.0, 0.0, 1.0]]
+        # assert np.all(np.isclose(nii.affine, expected_affine))
+        # fname_expected_json = os.path.join(__dir_testing__, "dset2", "nii", "095_dicom_rot_ep2d_bold_shimming_20250415120524.json")
+        # fname_json = os.path.join(path_output, "160_ep2d_bold_shimming_magnitude_echo-0.json")
+        # verify_sidecar(fname_json, fname_expected_json)
+        pass
+
+
 def verify_sidecar(fname_sidecar, fname_expected_sidecar, skip_tags=None):
     """Verify the sidecar JSON file against the expected values."""
 
