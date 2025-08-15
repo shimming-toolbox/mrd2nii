@@ -8,14 +8,11 @@ import ismrmrd
 
 
 def create_bids_sidecar(metadata, volume_images):
-    volume_metas = [ismrmrd.Meta.deserialize(img.attribute_string) for img in volume_images]
-    # if 'IceMiniHead' in volume_metas[0]:
-    #     logging.info("IceMiniHead[0]: %s", base64.b64decode(volume_metas[0]['IceMiniHead']).decode('utf-8'))
 
     # Parse Mini hdr
     img_metas = []
-    for i in range(len(volume_metas)):
-        img_metas.append(read_vendor_header_img(volume_metas[i]))
+    for image in volume_images:
+        img_metas.append(read_vendor_header_img(image))
 
     sidecar = {
         "Modality": "MR",
@@ -101,6 +98,8 @@ def create_bids_sidecar(metadata, volume_images):
     sidecar["DwellTime"] = extract_dwell_time(metadata)
     sidecar["MRAcquisitionType"] = extract_acq_type(metadata)
 
+    sidecar["TablePosition"] = extract_table_position(volume_images[0])
+
     if metadata.encoding[0].parallelImaging.accelerationFactor.kspace_encoding_step_1 != 1:
         sidecar["ParallelReductionFactorInPlane"] = metadata.encoding[0].parallelImaging.accelerationFactor.kspace_encoding_step_1
     else:
@@ -115,7 +114,6 @@ def create_bids_sidecar(metadata, volume_images):
     sidecar["ScanOptions"] = extract_scan_options(metadata, vendor_header)
     if vendor_header is not None:
         sidecar["PulseSequenceDetails"] = vendor_header.get("tSequenceFileName")
-        sidecar["TablePosition"] = extract_table_position(vendor_header)
         sidecar["BaseResolution"] = int(vendor_header["sKSpace"].get("lBaseResolution"))
         sidecar["ShimSetting"] = extract_shim_settings(vendor_header)
         # sCoilSelectMeas.aRxCoilSelectData[0].asList[0].sCoilElementID.tCoilID
@@ -191,9 +189,10 @@ def extract_acq_time(img_meta):
     return parsed_acq_time
 
 
-def extract_table_position(vhdr_metadata):
-    logging.warning("Need to verify this")
-    return [0, 0, - float(vhdr_metadata["sMds"]["lMdsPtabAbsStartPosZ"])]
+def extract_table_position(image):
+    # I have not found a good table position tag. Using the SlicePosLightMarker tag and the position seems to do the
+    # trick
+    return [0, 0, image.getHead().position[2] - float(image.meta.get('SlicePosLightMarker')[2])]
 
 
 def extract_sequence_type(metadata):
@@ -223,7 +222,8 @@ def extract_image_type(img_meta):
     return image_type
 
 
-def read_vendor_header_img(meta):
+def read_vendor_header_img(image):
+    meta = ismrmrd.Meta.deserialize(image.attribute_string)
     # logging.info(meta.keys())
     # ['AcquisitionContrast', 'DistortionCorrection', 'EchoTime', 'FrameOfReference', 'IceImageControl', 'IceMiniHead', 'ImageColumnDir', 'ImageHistory', 'ImageRowDir', 'ImageSliceNormDir', 'ImageType', 'Keep_image_geometry', 'ReadPhaseSeqSwap', 'RepetitionTime', 'SequenceDescription', 'SlicePosLightMarker']
     vendor_header = None

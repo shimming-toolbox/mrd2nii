@@ -40,7 +40,7 @@ def test_mrd2nii_dset1():
     assert np.all(np.isclose(nii.affine, expected_affine))
     fname_expected_json = os.path.join(path_dataset, "nii", "093_dicoms_ep2d_bold_shimming_20250415120524.json")
     fname_json = os.path.join(path_output, "155_ep2d_bold_shimming_magnitude_echo-0.json")
-    verify_sidecar(fname_json, fname_expected_json)
+    verify_sidecar(fname_json, fname_expected_json, skip_tags=["AcquisitionTime"])
 
 
 def test_mrd2nii_dset2():
@@ -75,7 +75,8 @@ def test_mrd2nii_dset2():
 
 
 def test_mrd2nii_dset3():
-    """Test MRD to NIfTI conversion for dataset 2. TRA EPI ROT"""
+    """Test MRD to NIfTI conversion for dataset 3. These are waveforms."""
+
 
     path_dataset = os.path.join(__dir_testing__, "dset3")
     # Define the path to the MRD file and output directory
@@ -94,21 +95,12 @@ def test_mrd2nii_dset3():
                         catch_exceptions=False)
 
     assert res.exit_code == 0, f"Error: {res.exit_code} - {res.output}"
-    # nii = nib.load(os.path.join(path_output, "160_ep2d_bold_shimming_magnitude_echo-0.nii.gz"))
-    # expected_affine = [[-2.45199919, -7.93683483e-08, 5.05236149, 100.587128],
-    #                    [0.161766902, 2.55949664, 2.60471988, -146.346985],
-    #                    [0.862099826, -0.480271578, 13.8812542, -70.0200882],
-    #                    [0.0, 0.0, 0.0, 1.0]]
-    # assert np.all(np.isclose(nii.affine, expected_affine))
-    # fname_expected_json = os.path.join(path_dataset, "nii", "095_dicom_rot_ep2d_bold_shimming_20250415120524.json")
-    # fname_json = os.path.join(path_output, "160_ep2d_bold_shimming_magnitude_echo-0.json")
-    # verify_sidecar(fname_json, fname_expected_json)
     pass
 
 
 def test_mrd2nii_dset4():
-    """Test MRD to NIfTI conversion for dataset 2. EPI GRAPPA"""
-    """ Todo: Currently it is flipped"""
+    """Test MRD to NIfTI conversion for dataset 4. EPI GRAPPA"""
+    # Needed to use image.meta['ImageRowDir'], etc instead of image.get_head().read_dir, etc
 
     path_dataset = os.path.join(__dir_testing__, "dset4")
     # Define the path to the MRD file and output directory
@@ -136,6 +128,39 @@ def test_mrd2nii_dset4():
     assert np.all(np.isclose(nii.affine, expected_affine, atol=1e-5))
     fname_expected_json = os.path.join(path_dataset, "nii", "077_dicoms_ep2d_bold_ST_shim_nomad_1.1x1.1_20250811095729.json")
     fname_json = os.path.join(path_output, "134_ep2d_bold_ST_shim_nomad_1.1x1.1_magnitude_echo-0.json")
+    verify_sidecar(fname_json, fname_expected_json, skip_tags=["PhaseEncodingSteps"])
+
+
+def test_mrd2nii_dset5():
+    """Test MRD to NIfTI conversion for dataset 5. EPI GRAPPA"""
+    # Needed to use pos light marker instead of .position. This tag can also be sued to extract the table position
+
+    path_dataset = os.path.join(__dir_testing__, "dset5")
+    # Define the path to the MRD file and output directory
+    path_mrd = os.path.join(path_dataset, "mrd")
+    path_output = os.path.join(path_dataset, "mrd2nii")
+    if os.path.exists(path_output):
+        shutil.rmtree(path_output)
+
+    runner = CliRunner()
+
+    res = runner.invoke(mrd2nii_int,
+                        [
+                            '--input', path_mrd,
+                            '--output', path_output
+                        ],
+                        catch_exceptions=False)
+
+    assert res.exit_code == 0, f"Error: {res.exit_code} - {res.output}"
+    nii = nib.load(os.path.join(path_output, "31_ep2d_bold_ST_shim_nomad_5vols_magnitude_echo-0.nii.gz"))
+
+    expected_affine = [[-2.60416675, 0, 0, 125],
+                       [0, 2.60416675, 0, -114.97956085],
+                       [0, 0, 15, -79.17463684],
+                       [0, 0, 0, 1]]
+    assert np.all(np.isclose(nii.affine, expected_affine, atol=1e-5))
+    fname_expected_json = os.path.join(path_dataset, "nii", "008_dicoms_ep2d_bold_ST_shim_nomad_5vols_20250811095729.json")
+    fname_json = os.path.join(path_output, "31_ep2d_bold_ST_shim_nomad_5vols_magnitude_echo-0.json")
     verify_sidecar(fname_json, fname_expected_json, skip_tags=["PhaseEncodingSteps"])
 
 

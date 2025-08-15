@@ -176,7 +176,7 @@ def save_waveform_log_file(logfile_id, trace_ids, trace_names, data_wav, fname_o
             f.write("\n")
 
 
-def mrd2nii_volume(metadata, volume_images):
+def mrd2nii_volume(metadata, volume_images, skip_sidecar=False):
     # logging.info(f"Header: {header}")
     # Header: version: 1
     # data_type: 5
@@ -205,10 +205,15 @@ def mrd2nii_volume(metadata, volume_images):
     # user_float: 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
     # attribute_string_len: 4580
 
+    # Todo: single slice acquisitions are not supported yet
+
     logging.info(volume_images[0].getHead())
 
     # Extract ordering
     nb_slices = int(metadata.encoding[0].encodingLimits.slice.maximum) + 1
+
+    if nb_slices <= 1:
+        raise NotImplementedError("Single slice acquisitions are not supported yet")
 
     if metadata.encoding[0].reconSpace.matrixSize.z != 1:
         raise NotImplementedError("Only  2D acquisitions are supported")
@@ -282,21 +287,26 @@ def mrd2nii_volume(metadata, volume_images):
                   volume_images[idxbeg_in_volume_images].meta['ImageSliceNormDir'][2]]
 
     affine = np.zeros((4, 4))
-    # Could be wrong axis
     affine[:3, 0] = pix_dim[0] * rotm[:, 0]
     affine[:3, 1] = pix_dim[1] * rotm[:, 1]
     affine[:3, 2] = pix_dim[2] * rotm[:, 2]
 
+    # 'SlicePosLightMarker' seems to be more accurate
+    if volume_images[0].meta.get('SlicePosLightMarker') is not None:
+        im_beg_pos = [float(i) for i in volume_images[idxbeg_in_volume_images].meta.get('SlicePosLightMarker')]
+        im_end_pos = [float(i) for i in volume_images[idxend_in_volume_images].meta.get('SlicePosLightMarker')]
+    else:
+        im_beg_pos = volume_images[idxbeg_in_volume_images].getHead().position
+        im_end_pos = volume_images[idxend_in_volume_images].getHead().position
+
     mid_voxel_coord = [
-        (volume_images[idxbeg_in_volume_images].getHead().position[0] +
-         volume_images[idxend_in_volume_images].getHead().position[0]) / 2,
-        (volume_images[idxbeg_in_volume_images].getHead().position[1] +
-         volume_images[idxend_in_volume_images].getHead().position[1]) / 2,
-        (volume_images[idxbeg_in_volume_images].getHead().position[2] +
-         volume_images[idxend_in_volume_images].getHead().position[2]) / 2
+        (im_beg_pos[0] + im_end_pos[0]) / 2,
+        (im_beg_pos[1] + im_end_pos[1]) / 2,
+        (im_beg_pos[2] + im_end_pos[2]) / 2
     ]
+
     mid_voxel_index = np.array(matrix) / 2
-    # Some adjustment though experimental testing (maybe due to where the (0,0,0) is defined?)
+    # Some adjustment through experimental testing (maybe due to where the (0,0,0) is defined?)
     # I would have expected needing (-0.5, -0.5, -0.5) everywhere (middle of the corner voxel)
     mid_voxel_index += np.array((0, 1, 0.5))
 
@@ -333,10 +343,9 @@ def mrd2nii_volume(metadata, volume_images):
             a_volume_image.append(volume_images[i])
     nb_repetitions += 1
 
-    volume_metas = [ismrmrd.Meta.deserialize(img.attribute_string) for img in volume_images]
     img_metas = []
-    for i in range(len(volume_metas)):
-        img_metas.append(read_vendor_header_img(volume_metas[i]))
+    for image in volume_images:
+        img_metas.append(read_vendor_header_img(image))
 
     data = np.zeros((matrix[0], matrix[1], nb_slices, nb_repetitions))
     for i_vol, volume in enumerate(volume_images):
@@ -367,6 +376,108 @@ def mrd2nii_volume(metadata, volume_images):
     nii.header.set_qform(affine, code=1)
     nii.header.set_sform(affine, code=1)
 
-    sidecar = create_bids_sidecar(metadata, a_volume_image)
+    if not skip_sidecar:
+        sidecar = create_bids_sidecar(metadata, a_volume_image)
+    else:
+        sidecar = None
 
     return nii, sidecar
+
+
+def mrd2nii_stack(metadata, image, include_slice_gap=True):
+
+    header = image.getHead()
+    logging.info(header)
+
+    # Extract ordering
+    nb_slices = header.matrix_size[-1]
+
+    if metadata.encoding[0].reconSpace.matrixSize.z != 1:
+        raise NotImplementedError("Only  2D acquisitions are supported")
+
+    matrix = [metadata.encoding[0].reconSpace.matrixSize.x, metadata.encoding[0].reconSpace.matrixSize.y, nb_slices]
+
+    fov = [metadata.encoding[0].reconSpace.fieldOfView_mm.x, metadata.encoding[0].reconSpace.fieldOfView_mm.y,
+           metadata.encoding[0].reconSpace.fieldOfView_mm.z]
+
+    vendor_header = read_vendor_header_img(image)
+    slice_gap = vendor_header.get('SpacingBetweenSlices')
+
+    if include_slice_gap:
+        vendor_header = read_vendor_header_img(image)
+        fov[2] = slice_gap
+
+    pix_dim = [
+        fov[0] / matrix[0],
+        fov[1] / matrix[1],
+        fov[2] / matrix[2]]
+
+    rotm = np.zeros((3, 3))
+    rotm[:, 0] = [image.meta['ImageRowDir'][0],
+                  image.meta['ImageRowDir'][1],
+                  image.meta['ImageRowDir'][2]]
+    rotm[:, 1] = [image.meta['ImageColumnDir'][0],
+                  image.meta['ImageColumnDir'][1],
+                  image.meta['ImageColumnDir'][2]]
+    rotm[:, 2] = [image.meta['ImageSliceNormDir'][0],
+                  image.meta['ImageSliceNormDir'][1],
+                  image.meta['ImageSliceNormDir'][2]]
+
+    affine = np.zeros((4, 4))
+    affine[:3, 0] = pix_dim[0] * rotm[:, 0]
+    affine[:3, 1] = pix_dim[1] * rotm[:, 1]
+    affine[:3, 2] = pix_dim[2] * rotm[:, 2]
+
+    # 'SlicePosLightMarker' seems to be more accurate
+    if image.meta.get('SlicePosLightMarker') is not None:
+        mid_voxel_coord = [float(i) for i in image.meta.get('SlicePosLightMarker')]
+    else:
+        mid_voxel_coord = list(np.array(image.position))
+
+    mid_voxel_index = np.array(matrix) / 2
+    # Some adjustment through experimental testing (maybe due to where the (0,0,0) is defined?)
+    # I would have expected needing (-0.5, -0.5, -0.5) everywhere (middle of the corner voxel)
+    mid_voxel_index += np.array((0, 1, 0.5))
+    # mid_voxel_index += np.array((0, 0, +0.5))
+
+    logging.info(f"matrix size: {matrix}")
+    logging.info(f"mid_voxel_coord: {list(mid_voxel_coord)}")
+    # (matrix / 2) @ rotm + translation = mid_voxel_coord
+
+    mid_voxel_index -= np.array([0, matrix[1], matrix[2]])
+    translation = mid_voxel_coord - (affine[:3, :3] @ mid_voxel_index)
+    logging.info(f"translation: {list(translation)}")
+
+    affine[:3, 3] = translation
+    affine[3, 3] = 1
+
+    # Not entirely sure what is going on, it works experimentally
+    affine[:2, :] *= -1
+    affine[:, 1:3] *= -1
+
+    logging.info(f"pix_dim: {pix_dim}")
+    logging.info(f"rotm: {rotm}")
+    logging.info(f"matrix size: {matrix}")
+    logging.info(f"FOV: {fov}")
+    logging.info(f"affine: {affine}")
+
+    # Reconstruct images
+    data = np.zeros((matrix[0], matrix[1], nb_slices))
+
+    datatmp = np.flip(image.data[0, 0, :, :], 0)
+    datatmp = np.transpose(datatmp, (1, 0))
+    data[:, :, 0] = datatmp
+
+    if data.shape[-1] == 1:
+        data = np.squeeze(data, axis=-1)
+
+    nii = nib.Nifti1Image(data, affine=affine)
+    if len(nii.shape) > 3:
+        nii.header.set_xyzt_units("mm", "sec")
+    else:
+        nii.header.set_xyzt_units("mm")
+
+    nii.header.set_qform(affine, code=1)
+    nii.header.set_sform(affine, code=1)
+
+    return nii
