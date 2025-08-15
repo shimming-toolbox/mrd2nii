@@ -31,7 +31,7 @@ def create_bids_sidecar(metadata, volume_images):
         "PatientPosition": metadata.measurementInformation.patientPosition.value,
         # "ProcedureStepDescription": "",
         # "SoftwareVersions": "",
-        # "MRAcquisitionType": "",
+        "MRAcquisitionType": "",
         # "StudyDescription": "",
         "SeriesDescription": img_metas[0].get("SequenceDescription"),
         "ProtocolName": metadata.measurementInformation.protocolName,
@@ -63,6 +63,7 @@ def create_bids_sidecar(metadata, volume_images):
         "ReceiveCoilActiveElements": img_metas[0].get("CoilString"),
         "CoilString": "",
         "PulseSequenceDetails": "",
+        "RefLinesPE": None,
         # "CoilCombinationMethod": "",
         "ConsistencyInfo": "",
         # "MatrixCoilMode": "",
@@ -70,13 +71,17 @@ def create_bids_sidecar(metadata, volume_images):
         "PercentSampling": img_metas[0].get("PercentSampling"),
         # "EchoTrainLength": "",
         # "EchoTrainLength": img_metas[0].get("EchoTrainLength"), Does not work
+        # "PartialFourierDirection": "",
         "PhaseEncodingSteps": img_metas[0].get("NoOfPhaseEncodingSteps"),
-        # "FrequencyEncodingSteps": None,
-        # "AcquisitionMatrixPE": None,
-        # "ReconMatrixPE": None,
+        "FrequencyEncodingSteps": metadata.encoding[0].reconSpace.matrixSize.x,
+        "AcquisitionMatrixPE": metadata.encoding[0].encodedSpace.matrixSize.y,
+        "ReconMatrixPE": metadata.encoding[0].reconSpace.matrixSize.y,
         "BandwidthPerPixelPhaseEncode": img_metas[0].get("BandwidthPerPixelPhaseEncode"),
-        "EffectiveEchoSpacing": None,
-        # "DerivedVendorReportedEchoSpacing": None,
+        "ParallelReductionFactorInPlane": None,
+        "ParallelReductionFactorOutOfPlane": None,
+        # "ParallelAcquisitionTechnique": "",
+        # "EffectiveEchoSpacing": None,
+        "DerivedVendorReportedEchoSpacing": None,
         # "AcquisitionDuration": None,
         # "TotalReadoutTime": None,
         # "PixelBandwidth": None,
@@ -88,37 +93,76 @@ def create_bids_sidecar(metadata, volume_images):
         "ConversionSoftware": "mrd2nii"
     }
 
-    sidecar = fill_fatsat(metadata, sidecar)
     # sidecar["SliceTiming"] = extract_slice_timing(metadata, volume_images)
     sidecar["SliceTiming"] = extract_slice_timing_ice_mini_hdr(metadata, img_metas, volume_images)
     sidecar["EchoTime"] = extract_te(metadata, volume_images)
     sidecar["RepetitionTime"] = extract_tr(metadata)
-    sidecar["EffectiveEchoSpacing"] = extract_effective_echo_spacing(metadata)
+    sidecar["DerivedVendorReportedEchoSpacing"] = extract_vendor_echo_spacing(metadata)
     sidecar["DwellTime"] = extract_dwell_time(metadata)
+    sidecar["MRAcquisitionType"] = extract_acq_type(metadata)
+
+    if metadata.encoding[0].parallelImaging.accelerationFactor.kspace_encoding_step_1 != 1:
+        sidecar["ParallelReductionFactorInPlane"] = metadata.encoding[0].parallelImaging.accelerationFactor.kspace_encoding_step_1
+    else:
+        sidecar.pop("ParallelReductionFactorInPlane")
+
+    if metadata.encoding[0].parallelImaging.accelerationFactor.kspace_encoding_step_2 != 1:
+        sidecar["ParallelReductionFactorOutOfPlane"] = metadata.encoding[0].parallelImaging.accelerationFactor.kspace_encoding_step_2
+    else:
+        sidecar.pop("ParallelReductionFactorOutOfPlane")
 
     vendor_header = read_vendor_header_metadata(metadata)
+    sidecar["ScanOptions"] = extract_scan_options(metadata, vendor_header)
     if vendor_header is not None:
         sidecar["PulseSequenceDetails"] = vendor_header.get("tSequenceFileName")
         sidecar["TablePosition"] = extract_table_position(vendor_header)
         sidecar["BaseResolution"] = int(vendor_header["sKSpace"].get("lBaseResolution"))
         sidecar["ShimSetting"] = extract_shim_settings(vendor_header)
         # sCoilSelectMeas.aRxCoilSelectData[0].asList[0].sCoilElementID.tCoilID
-        sidecar["ReceiveCoilName"] = \
-        vendor_header["sCoilSelectMeas"]["aRxCoilSelectData[0]"]["asList[0]"]["sCoilElementID"]["tCoilID"]
-        sidecar["CoilString"] = vendor_header["sCoilSelectMeas"]["aRxCoilSelectData[0]"]["asList[0]"]["sCoilElementID"][
-            "tCoilID"]
+        sidecar["ReceiveCoilName"] = vendor_header["sCoilSelectMeas"]["aRxCoilSelectData[0]"]["asList[0]"]["sCoilElementID"]["tCoilID"]
+        sidecar["CoilString"] = vendor_header["sCoilSelectMeas"]["aRxCoilSelectData[0]"]["asList[0]"]["sCoilElementID"]["tCoilID"]
         sidecar["ConsistencyInfo"] = vendor_header.get("ulVersion")
+        if vendor_header["sPat"].get("lRefLinesPE") is None:
+            sidecar.pop("RefLinesPE")
+        else:
+            sidecar["RefLinesPE"] = int(vendor_header["sPat"].get("lRefLinesPE"))
+
+    # Todo: GRAPPA: sPat['ucPATMode']. Need to verify what a sense scan does
 
     # logging.info(sidecar)
     return sidecar
 
 
+def extract_scan_options(metadata, vendor_header):
+    scan_options = ""
+
+    if vendor_header is not None:
+        phase_partial_fourier = True if vendor_header['sKSpace']['ucPhasePartialFourier'] != '16' else False
+        if phase_partial_fourier:
+            scan_options += "PFP\\"
+
+        readout_partial_fourier = True if vendor_header['sKSpace']['ucReadoutPartialFourier'] != '16' else False
+        if readout_partial_fourier:
+            scan_options += "PFF\\"
+
+    if has_fatsat(metadata):
+        scan_options += "FS\\"
+
+    return scan_options if len(scan_options) < 2 else scan_options[:-1]
+
+
+def extract_acq_type(metadata):
+    if "2D" in metadata.encoding[0].trajectoryDescription.comment:
+        return "2D"
+    elif "3D" in metadata.encoding[0].trajectoryDescription.comment:
+        return "3D"
+
+
 def extract_image_orientation_patient_dicom(image):
-    direc = list(image.getHead().read_dir)
-    phase_dir = [-a_dir for a_dir in image.getHead().phase_dir]
-    logging.warning("Need to verify phase direction of ImageOrientationPatientDICOM")
-    direc.extend(phase_dir)
-    return direc
+    dir_enc = image.meta['ImageRowDir']
+    dir_enc.extend(image.meta['ImageColumnDir'])
+    dir_enc = [float(x) for x in dir_enc]
+    return dir_enc
 
 
 def extract_shim_settings(vhdr_metadata):
@@ -358,7 +402,7 @@ def extract_dwell_time(metadata):
     return dwell_time
 
 
-def extract_effective_echo_spacing(metadata):
+def extract_vendor_echo_spacing(metadata):
     if len(metadata.sequenceParameters.echo_spacing) >= 2:
         raise NotImplementedError("Conversion for multiple echo_spacings is not supported")
 
@@ -394,30 +438,31 @@ def extract_slice_timing_ice_mini_hdr(metadata, img_metas, volume_images):
     # Extract ordering
     mrd_idx_to_order_idx = {}
 
-    for i_param, param in enumerate(metadata.userParameters.userParameterLong):
-        if param.name == f"RelativeSliceNumber_{i_param + 1}":
-            mrd_idx_to_order_idx[i_param] = int(param.value)
+    for param in metadata.userParameters.userParameterLong:
+        if param.name.startswith("RelativeSliceNumber_"):
+            i_slice = int(param.name.split("_")[-1]) - 1
+            mrd_idx_to_order_idx[i_slice] = int(param.value)
 
     slice_timing = [0 for _ in range(nb_slices)]
 
-    def convert_acq_time_strint_to_s_past_midnight(acq_time: str):
+    def convert_acq_time_string_to_s_past_midnight(acq_time: str):
         acq_time = acq_time.split(".")
         if len(acq_time) != 2 or len(acq_time[0]) != 6 or len(acq_time[1]) != 6:
             raise ValueError("Acquisition time not in the expected format")
         atime = 3600 * int(acq_time[0][:2]) + 60 * int(acq_time[0][2:4]) + int(acq_time[0][4:]) + (int(acq_time[1]) / 1e6)
         return atime
 
-    first_timestamp = convert_acq_time_strint_to_s_past_midnight(img_metas[0]['AcquisitionTime'])
+    first_timestamp = convert_acq_time_string_to_s_past_midnight(img_metas[0]['AcquisitionTime'])
     for img_meta in img_metas:
-        if convert_acq_time_strint_to_s_past_midnight(img_meta['AcquisitionTime']) < first_timestamp:
-            first_timestamp = convert_acq_time_strint_to_s_past_midnight(img_meta['AcquisitionTime'])
+        if convert_acq_time_string_to_s_past_midnight(img_meta['AcquisitionTime']) < first_timestamp:
+            first_timestamp = convert_acq_time_string_to_s_past_midnight(img_meta['AcquisitionTime'])
 
     if first_timestamp is None:
         raise RuntimeError("First slice unavailable, can't extract_slice_timing")
 
     for i, image in enumerate(volume_images):
         hdr = image.getHead()
-        atime = convert_acq_time_strint_to_s_past_midnight(img_metas[i]['AcquisitionTime'])
+        atime = convert_acq_time_string_to_s_past_midnight(img_metas[i]['AcquisitionTime'])
         slice_timing[mrd_idx_to_order_idx[hdr.slice]] = round(atime - first_timestamp, 3)
 
     return slice_timing
@@ -428,6 +473,7 @@ def extract_slice_timing(metadata, volume_images):
     Not sure why, but this way of extracting the slice timing is wrong by a factor of 2.5. See
     extract_slice_timing_ice_mini_hdr for the "correct" way to extract the slice timing.
     """
+    # Todo: This is probably in 'ticks', which is 2.5 ms/tick
     logging.warning("Slice timing is different (/2.5) than dcm2niix but seems to be in the right order")
     nb_slices = int(metadata.encoding[0].encodingLimits.slice.maximum) + 1
 
@@ -456,12 +502,10 @@ def extract_slice_timing(metadata, volume_images):
     return slice_timing
 
 
-def fill_fatsat(metadata, sidecar):
+def has_fatsat(metadata):
     fatsat = False
     for i_param, param in enumerate(metadata.userParameters.userParameterString):
         if param.name == "FatWaterContrast":
             fatsat = True
 
-    if fatsat:
-        sidecar["ScanOptions"] += "FS"
-    return sidecar
+    return fatsat

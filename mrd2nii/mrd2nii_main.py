@@ -216,10 +216,12 @@ def mrd2nii_volume(metadata, volume_images):
     mrd_idx_to_order_idx = {}
     order_idx_to_mrd_idx = {}
 
-    for i_param, param in enumerate(metadata.userParameters.userParameterLong):
-        if param.name == f"RelativeSliceNumber_{i_param + 1}":
-            order_idx_to_mrd_idx[int(param.value)] = i_param
-            mrd_idx_to_order_idx[i_param] = int(param.value)
+    for param in metadata.userParameters.userParameterLong:
+        if param.name.startswith("RelativeSliceNumber_"):
+            i_slice = int(param.name.split("_")[-1]) - 1
+            order_idx_to_mrd_idx[int(param.value)] = i_slice
+            mrd_idx_to_order_idx[i_slice] = int(param.value)
+
     logging.info(f"mrd_idx_to_order_idx: {mrd_idx_to_order_idx}")
     logging.info(f"order_idx_to_mrd_idx: {order_idx_to_mrd_idx}")
 
@@ -269,15 +271,15 @@ def mrd2nii_volume(metadata, volume_images):
     fov[2] = fovz_missing_edges + pix_dim[2]
 
     rotm = np.zeros((3, 3))
-    rotm[:, 0] = [volume_images[idxbeg_in_volume_images].getHead().read_dir[0],
-                  volume_images[idxbeg_in_volume_images].getHead().read_dir[1],
-                  volume_images[idxbeg_in_volume_images].getHead().read_dir[2]]
-    rotm[:, 1] = [volume_images[idxbeg_in_volume_images].getHead().phase_dir[0],
-                  volume_images[idxbeg_in_volume_images].getHead().phase_dir[1],
-                  volume_images[idxbeg_in_volume_images].getHead().phase_dir[2]]
-    rotm[:, 2] = [volume_images[idxbeg_in_volume_images].getHead().slice_dir[0],
-                  volume_images[idxbeg_in_volume_images].getHead().slice_dir[1],
-                  volume_images[idxbeg_in_volume_images].getHead().slice_dir[2]]
+    rotm[:, 0] = [volume_images[idxbeg_in_volume_images].meta['ImageRowDir'][0],
+                  volume_images[idxbeg_in_volume_images].meta['ImageRowDir'][1],
+                  volume_images[idxbeg_in_volume_images].meta['ImageRowDir'][2]]
+    rotm[:, 1] = [volume_images[idxbeg_in_volume_images].meta['ImageColumnDir'][0],
+                  volume_images[idxbeg_in_volume_images].meta['ImageColumnDir'][1],
+                  volume_images[idxbeg_in_volume_images].meta['ImageColumnDir'][2]]
+    rotm[:, 2] = [volume_images[idxbeg_in_volume_images].meta['ImageSliceNormDir'][0],
+                  volume_images[idxbeg_in_volume_images].meta['ImageSliceNormDir'][1],
+                  volume_images[idxbeg_in_volume_images].meta['ImageSliceNormDir'][2]]
 
     affine = np.zeros((4, 4))
     # Could be wrong axis
@@ -296,20 +298,22 @@ def mrd2nii_volume(metadata, volume_images):
     mid_voxel_index = np.array(matrix) / 2
     # Some adjustment though experimental testing (maybe due to where the (0,0,0) is defined?)
     # I would have expected needing (-0.5, -0.5, -0.5) everywhere (middle of the corner voxel)
-    mid_voxel_index += np.array((0, -1, -0.5))
+    mid_voxel_index += np.array((0, 1, 0.5))
 
     logging.info(f"matrix size: {matrix}")
     logging.info(f"mid_voxel_coord: {list(mid_voxel_coord)}")
     # (matrix / 2) @ rotm + translation = mid_voxel_coord
 
+    mid_voxel_index -= np.array([0, matrix[1], matrix[2]])
     translation = mid_voxel_coord - (affine[:3, :3] @ mid_voxel_index)
     logging.info(f"translation: {list(translation)}")
 
     affine[:3, 3] = translation
     affine[3, 3] = 1
 
-    # LPS to RAS
+    # Not entirely sure what is going on, it works experimentally
     affine[:2, :] *= -1
+    affine[:, 1:3] *= -1
     logging.info(f"Translation idxbeg: {[i for i in volume_images[idxbeg_in_volume_images].getHead().position]}")
     logging.info(f"Translation idxend: {[i for i in volume_images[idxend_in_volume_images].getHead().position]}")
 
@@ -334,7 +338,6 @@ def mrd2nii_volume(metadata, volume_images):
     for i in range(len(volume_metas)):
         img_metas.append(read_vendor_header_img(volume_metas[i]))
 
-    # todo: maybe matrix[1], matrix[0]
     data = np.zeros((matrix[0], matrix[1], nb_slices, nb_repetitions))
     for i_vol, volume in enumerate(volume_images):
         slice = volume.getHead().slice
