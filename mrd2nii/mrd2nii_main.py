@@ -310,13 +310,13 @@ def mrd2nii_volume(metadata, volume_images, skip_sidecar=False):
     # I would have expected needing (-0.5, -0.5, -0.5) everywhere (middle of the corner voxel)
     mid_voxel_index += np.array((0, 1, 0.5))
 
-    logging.info(f"matrix size: {matrix}")
-    logging.info(f"mid_voxel_coord: {list(mid_voxel_coord)}")
+    logging.debug(f"matrix size: {matrix}")
+    logging.debug(f"mid_voxel_coord: {list(mid_voxel_coord)}")
     # (matrix / 2) @ rotm + translation = mid_voxel_coord
 
     mid_voxel_index -= np.array([0, matrix[1], matrix[2]])
     translation = mid_voxel_coord - (affine[:3, :3] @ mid_voxel_index)
-    logging.info(f"translation: {list(translation)}")
+    logging.debug(f"translation: {list(translation)}")
 
     affine[:3, 3] = translation
     affine[3, 3] = 1
@@ -324,14 +324,14 @@ def mrd2nii_volume(metadata, volume_images, skip_sidecar=False):
     # Not entirely sure what is going on, it works experimentally
     affine[:2, :] *= -1
     affine[:, 1:3] *= -1
-    logging.info(f"Translation idxbeg: {[i for i in volume_images[idxbeg_in_volume_images].getHead().position]}")
-    logging.info(f"Translation idxend: {[i for i in volume_images[idxend_in_volume_images].getHead().position]}")
+    logging.debug(f"Translation idxbeg: {[i for i in volume_images[idxbeg_in_volume_images].getHead().position]}")
+    logging.debug(f"Translation idxend: {[i for i in volume_images[idxend_in_volume_images].getHead().position]}")
 
-    logging.info(f"pix_dim: {pix_dim}")
-    logging.info(f"rotm: {rotm}")
-    logging.info(f"matrix size: {matrix}")
-    logging.info(f"FOV: {fov}")
-    logging.info(f"affine: {affine}")
+    logging.debug(f"pix_dim: {pix_dim}")
+    logging.debug(f"rotm: {rotm}")
+    logging.debug(f"matrix size: {matrix}")
+    logging.debug(f"FOV: {fov}")
+    logging.debug(f"affine: {affine}")
 
     # Reconstruct images
     a_volume_image = []
@@ -351,7 +351,7 @@ def mrd2nii_volume(metadata, volume_images, skip_sidecar=False):
     for i_vol, volume in enumerate(volume_images):
         slice = volume.getHead().slice
         repetition = volume.getHead().repetition
-        logging.info(f"repetition: {repetition}")
+        logging.debug(f"repetition: {repetition}")
 
         if img_metas[i_vol]["ProtocolSliceNumber"] != mrd_idx_to_order_idx[slice]:
             raise RuntimeError("ProtocolSliceNumber does not match slice number")
@@ -359,7 +359,7 @@ def mrd2nii_volume(metadata, volume_images, skip_sidecar=False):
         if img_metas[i_vol]["AcquisitionNumber"] - 1 != repetition:
             raise RuntimeError("Repetition # does not match repetition number")
 
-        # logging.info(f"shape: {volume.data.shape}")
+        # logging.debug(f"shape: {volume.data.shape}")
         datatmp = np.flip(volume.data[0, 0, :, :], 0)
         datatmp = np.transpose(datatmp, (1, 0))
         data[:, :, mrd_idx_to_order_idx[slice], repetition] = datatmp
@@ -387,7 +387,7 @@ def mrd2nii_volume(metadata, volume_images, skip_sidecar=False):
 def mrd2nii_stack(metadata, image, include_slice_gap=True):
 
     header = image.getHead()
-    logging.info(header)
+    logging.debug(header)
 
     # Extract ordering
     nb_slices = header.matrix_size[-1]
@@ -440,13 +440,13 @@ def mrd2nii_stack(metadata, image, include_slice_gap=True):
     mid_voxel_index += np.array((0, 1, 0.5))
     # mid_voxel_index += np.array((0, 0, +0.5))
 
-    logging.info(f"matrix size: {matrix}")
-    logging.info(f"mid_voxel_coord: {list(mid_voxel_coord)}")
+    logging.debug(f"matrix size: {matrix}")
+    logging.debug(f"mid_voxel_coord: {list(mid_voxel_coord)}")
     # (matrix / 2) @ rotm + translation = mid_voxel_coord
 
     mid_voxel_index -= np.array([0, matrix[1], matrix[2]])
     translation = mid_voxel_coord - (affine[:3, :3] @ mid_voxel_index)
-    logging.info(f"translation: {list(translation)}")
+    logging.debug(f"translation: {list(translation)}")
 
     affine[:3, 3] = translation
     affine[3, 3] = 1
@@ -455,11 +455,11 @@ def mrd2nii_stack(metadata, image, include_slice_gap=True):
     affine[:2, :] *= -1
     affine[:, 1:3] *= -1
 
-    logging.info(f"pix_dim: {pix_dim}")
-    logging.info(f"rotm: {rotm}")
-    logging.info(f"matrix size: {matrix}")
-    logging.info(f"FOV: {fov}")
-    logging.info(f"affine: {affine}")
+    logging.debug(f"pix_dim: {pix_dim}")
+    logging.debug(f"rotm: {rotm}")
+    logging.debug(f"matrix size: {matrix}")
+    logging.debug(f"FOV: {fov}")
+    logging.debug(f"affine: {affine}")
 
     # Reconstruct images
     data = np.zeros((matrix[0], matrix[1], nb_slices))
