@@ -235,6 +235,42 @@ def read_vendor_header_img(image):
 
     def parse(head: str):
         # <XProtocol>{example}
+        def parse_array(head: str):
+            try:
+                head = head.strip().strip("\n")
+                if "<DefaultSize>" not in head[:13]:
+                    raise RuntimeError("No DefaultSize tag in ParamArray")
+
+                # head = head.strip("<DefaultSize>")
+                ind = head.find("\n")
+                if ind == -1:
+                    raise RuntimeError("No new line after DefaultSize tag in ParamArray")
+
+                head = head[ind:].strip()
+                if "<MaxSize>" not in head[:9]:
+                    raise RuntimeError("No MaxSize tag in ParamArray")
+
+                ind = head.find("\n")
+                if ind == -1:
+                    raise RuntimeError("No new line after MaxSize tag in ParamArray")
+
+                head = head[ind:].strip()
+                if "<Default>" not in head[:9]:
+                    raise RuntimeError("No Default tag in ParamArray")
+                head = head.strip("<Default>").strip()
+                if "<ParamString.\"\">" not in head[:16]:
+                    raise RuntimeError("No ParamString tag in ParamArray")
+                ind = head.find("\n")
+                if ind == -1:
+                    raise RuntimeError("No new line after Default/ParamString tag in ParamArray")
+                head = head[ind:].strip()
+                head = head.strip("{").strip("}").strip()
+                head = head.split(" ")
+                return [a.strip("\"") for a in head if a.strip() != ""]
+
+            except Exception:
+                logging.warning(f"Failed to parse ParamArray:{head}")
+                return []
 
         def extract_param_type_and_name(siemens_hdr_name: str):
             # <ParamString."SequenceString">
@@ -286,7 +322,7 @@ def read_vendor_header_img(image):
 
             param_type, param_name = extract_param_type_and_name(head[idx_start_name:idx_end_name])
             if param_type == "ParamArray":
-                logging.warning(f"ParamArray not implemented, not processing: {head[idx_start_value:idx_end_value]}")
+                parsed[param_name] = parse_array(head[idx_start_value:idx_end_value])
             elif param_type == "ParamMap":
                 parsed[param_name] = parse(head[idx_start_value:idx_end_value])
             elif param_type == "ParamLong":
@@ -363,7 +399,7 @@ def read_vendor_header_metadata(metadata):
             vendor_header = param.value
 
     if vendor_header is None:
-        logging.info("No vendor header")
+        logging.warning("No vendor header")
         return None
 
     header_dict = {}
