@@ -150,6 +150,8 @@ def extract_scan_options(metadata, vendor_header):
 
 
 def extract_acq_type(metadata):
+    if metadata.encoding[0].trajectoryDescription is None:
+        return None
     if "2D" in metadata.encoding[0].trajectoryDescription.comment:
         return "2D"
     elif "3D" in metadata.encoding[0].trajectoryDescription.comment:
@@ -264,9 +266,13 @@ def read_vendor_header_img(image):
                 if ind == -1:
                     raise RuntimeError("No new line after Default/ParamString tag in ParamArray")
                 head = head[ind:].strip()
-                head = head.strip("{").strip("}").strip()
-                head = head.split(" ")
-                return [a.strip("\"") for a in head if a.strip() != ""]
+                output = []
+                while len(head) > 0:
+                    ind_end_bracket = head.find("}")
+                    entry = head[:ind_end_bracket].strip("{").strip("}").strip()
+                    output.append(entry.strip("\"") if entry != "" else "")
+                    head = head[ind_end_bracket + 1:]
+                return output
 
             except Exception:
                 logging.warning(f"Failed to parse ParamArray:{head}")
