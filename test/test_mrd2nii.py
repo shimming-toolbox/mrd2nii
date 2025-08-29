@@ -33,3 +33,28 @@ def test_mrd2nii_stack():
                        [-0., 0.,   15., -11.24641132],
                        [0., -0., -0., 1.]]
     assert np.allclose(nii.affine, expected_affine)
+
+
+def test_mrd2nii_stack2():
+    path_mrd = os.path.join(__dir_testing__, "dset7", "mrd", "T1w_2025-08-27-163253_63.h5")
+    path_output = os.path.join(__dir_testing__, "dset7", "mrd2nii")
+    if not os.path.exists(path_output):
+        os.makedirs(path_output)
+    fname_output = os.path.join(path_output, "single_slice.nii.gz")
+
+    if os.path.exists(fname_output):
+        os.remove(fname_output)
+
+    dset = ismrmrd.Dataset(path_mrd, dataset_name="dataset", create_if_needed=False)
+    xml_header = dset.read_xml_header()
+    xml_header = xml_header.decode("utf-8")
+    metadata = ismrmrd.xsd.CreateFromDocument(xml_header)
+
+    image = dset.read_image("image_0", 50)
+    nii = mrd2nii_stack(metadata, image, include_slice_gap=True)
+    nib.save(nii, fname_output)
+    expected_affine = [[1, 0., 0., 45.5],
+                       [0., 1, 0., -116.39277077],
+                       [0., 0., 1, -163.78072289],
+                       [0., -0., 0., 1.]]
+    assert np.allclose(nii.affine, expected_affine)

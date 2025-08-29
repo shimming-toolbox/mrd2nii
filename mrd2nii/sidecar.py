@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*
 
 import base64
+from datetime import datetime, timedelta, time
 import logging
 
 import ismrmrd
@@ -32,7 +33,7 @@ def create_bids_sidecar(metadata, volume_images):
         # "StudyDescription": "",
         "SeriesDescription": img_metas[0].get("SequenceDescription"),
         "ProtocolName": metadata.measurementInformation.protocolName,
-        "ScanningSequence": extract_sequence_type(metadata),
+        "ScanningSequence": extract_scanning_sequence(metadata),
         # "SequenceVariant": "",
         "ScanOptions": "",
         "PulseSequenceName": img_metas[0].get("SequenceString"),
@@ -47,6 +48,7 @@ def create_bids_sidecar(metadata, volume_images):
         "SliceThickness": volume_images[0].getHead().field_of_view[2],
         "SpacingBetweenSlices": img_metas[0].get("SpacingBetweenSlices"),
         "TablePosition": [],
+        "EchoNumber": img_metas[0].get("EchoNumber") if metadata.encoding[0].encodingLimits.contrast.maximum > 1 else None,
         "EchoTime": None,
         "RepetitionTime": None,
         # "MTState": "",
@@ -127,7 +129,19 @@ def create_bids_sidecar(metadata, volume_images):
 
     # Todo: GRAPPA: sPat['ucPATMode']. Need to verify what a sense scan does
 
-    # logging.info(sidecar)
+    sidecar = clean_up(sidecar)
+    return sidecar
+
+
+def clean_up(sidecar):
+    keys_to_remove = []
+    for key, value in sidecar.items():
+        if value is None or value == "" or value == []:
+            keys_to_remove.append(key)
+
+    for key in keys_to_remove:
+        sidecar.pop(key)
+
     return sidecar
 
 
@@ -145,6 +159,9 @@ def extract_scan_options(metadata, vendor_header):
 
     if has_fatsat(metadata):
         scan_options += "FS\\"
+
+    if len(metadata.sequenceParameters.TI) > 0 and any(ti > 0 for ti in metadata.sequenceParameters.TI):
+        scan_options += "IR\\"
 
     return scan_options if len(scan_options) < 2 else scan_options[:-1]
 
@@ -186,9 +203,13 @@ def extract_acq_time(img_meta):
     if len(acq_time) != 13:
         logging.warning(f"acq time does not have the expected length in extract_acq_time: {acq_time}")
 
-    parsed_acq_time = f"{acq_time[0:2]}:{acq_time[2:4]}:{acq_time[4:]}"
-
-    return parsed_acq_time
+    dummy_date = datetime.today().date()
+    if img_meta.get("TimeAfterStart") is None:
+        acq_start = time.fromisoformat(acq_time).isoformat()
+    else:
+        dt_acq_start = datetime.combine(dummy_date, time.fromisoformat(acq_time)) - timedelta(seconds=img_meta.get("TimeAfterStart"))
+        acq_start = dt_acq_start.time().isoformat()
+    return acq_start
 
 
 def extract_table_position(image):
@@ -197,11 +218,19 @@ def extract_table_position(image):
     return [0, 0, image.getHead().position[2] - float(image.meta.get('SlicePosLightMarker')[2])]
 
 
-def extract_sequence_type(metadata):
+def extract_scanning_sequence(metadata):
+    seq_type = ""
     if metadata.sequenceParameters.sequence_type == "EPI":
-        return "EP"
-    else:
-        return ""
+        seq_type += "EP\\"
+    elif metadata.sequenceParameters.sequence_type == "Flash":
+        seq_type += "GR\\"
+
+    if len(metadata.sequenceParameters.TI) > 0 and any(ti > 0 for ti in metadata.sequenceParameters.TI):
+        seq_type += "IR\\"
+    if len(seq_type) != 0:
+        seq_type = seq_type[:-1]
+    return seq_type
+
 
 
 def extract_device_serial_number(metadata):
@@ -474,8 +503,11 @@ def extract_te(metadata, volume_images):
 
 def extract_slice_timing_ice_mini_hdr(metadata, img_metas, volume_images):
     """ img_metas and volume_images must be ordered the same """
-    # Todo: Con cross check with TimeAfterStart tag in img_metas
+    # Todo: Cross check with TimeAfterStart tag in img_metas
     nb_slices = int(metadata.encoding[0].encodingLimits.slice.maximum) + 1
+    if len(volume_images) != nb_slices:
+        logging.warning("Number of slices in metadata does not correspond to number of images, not extracting slice timing")
+        return []
 
     # Extract ordering
     mrd_idx_to_order_idx = {}
@@ -495,9 +527,11 @@ def extract_slice_timing_ice_mini_hdr(metadata, img_metas, volume_images):
         return atime
 
     first_timestamp = convert_acq_time_string_to_s_past_midnight(img_metas[0]['AcquisitionTime'])
-    for img_meta in img_metas:
+    first_timestamp_idx = 0
+    for i, img_meta in enumerate(img_metas):
         if convert_acq_time_string_to_s_past_midnight(img_meta['AcquisitionTime']) < first_timestamp:
             first_timestamp = convert_acq_time_string_to_s_past_midnight(img_meta['AcquisitionTime'])
+            first_timestamp_idx = i
 
     if first_timestamp is None:
         raise RuntimeError("First slice unavailable, can't extract_slice_timing")
@@ -505,7 +539,11 @@ def extract_slice_timing_ice_mini_hdr(metadata, img_metas, volume_images):
     for i, image in enumerate(volume_images):
         hdr = image.getHead()
         atime = convert_acq_time_string_to_s_past_midnight(img_metas[i]['AcquisitionTime'])
-        slice_timing[mrd_idx_to_order_idx[hdr.slice]] = round(atime - first_timestamp, 3)
+
+        if img_metas[first_timestamp_idx].get('TimeAfterStart') is None:
+            slice_timing[mrd_idx_to_order_idx[hdr.slice]] = round(atime - first_timestamp, 4)
+        else:
+            slice_timing[mrd_idx_to_order_idx[hdr.slice]] = round(atime - first_timestamp + img_metas[first_timestamp_idx]['TimeAfterStart'], 4)
 
     return slice_timing
 
@@ -551,3 +589,27 @@ def has_fatsat(metadata):
             fatsat = True
 
     return fatsat
+
+
+def extract_mrd_index_to_prot_sli_number(volume_images):
+    img_metas = []
+    for image in volume_images:
+        img_metas.append(read_vendor_header_img(image))
+
+    mapping = {}
+    for i, meta in enumerate(img_metas):
+        if meta.get("ProtocolSliceNumber") is not None:
+            mapping[volume_images[i].getHead().slice] = meta["ProtocolSliceNumber"]
+    return mapping
+
+
+def extract_prot_sli_number_to_mrd_index(volume_images):
+    img_metas = []
+    for image in volume_images:
+        img_metas.append(read_vendor_header_img(image))
+
+    mapping = {}
+    for i, meta in enumerate(img_metas):
+        if meta.get("ProtocolSliceNumber") is not None:
+            mapping[meta["ProtocolSliceNumber"]] = volume_images[i].getHead().slice
+    return mapping
