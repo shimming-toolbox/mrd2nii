@@ -203,6 +203,8 @@ def extract_acq_time(img_meta):
     if len(acq_time) != 13:
         logging.warning(f"acq time does not have the expected length in extract_acq_time: {acq_time}")
 
+    acq_time = acq_time[:2] + ":" + acq_time[2:4] + ":" + acq_time[4:]
+
     dummy_date = datetime.today().date()
     if img_meta.get("TimeAfterStart") is None:
         acq_start = time.fromisoformat(acq_time).isoformat()
