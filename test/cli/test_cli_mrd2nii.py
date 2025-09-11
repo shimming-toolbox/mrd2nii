@@ -32,14 +32,15 @@ def test_mrd2nii_dset1():
                         catch_exceptions=False)
 
     assert res.exit_code == 0, f"Error: {res.exit_code} - {res.output}"
-    nii = nib.load(os.path.join(path_output, "155_ep2d_bold_shimming_magnitude_echo-1.nii.gz"))
-    expected_affine = [[-2.60416675, 0., 0., 130.62680054],
-                       [0., 2.60416675, 0., -128.96043396],
-                       [0., 0., 15., -56.24641037],
-                       [0., 0., 0., 1.]]
-    assert np.all(np.isclose(nii.affine, expected_affine))
-    fname_expected_json = os.path.join(path_dataset, "nii", "093_dicoms_ep2d_bold_shimming_20250415120524.json")
-    fname_json = os.path.join(path_output, "155_ep2d_bold_shimming_magnitude_echo-1.json")
+    file_name_converted_nii = "155_ep2d_bold_shimming_magnitude_echo-1"
+    file_name_expected_nii = "093_dicoms_ep2d_bold_shimming_20250415120524"
+    nii = nib.load(os.path.join(path_output, f"{file_name_converted_nii}.nii.gz"))
+    nii_expected = nib.load(os.path.join(path_dataset, "nii", f"{file_name_expected_nii}.nii.gz"))
+    assert np.all(np.isclose(nii.affine, nii_expected.affine))
+    # The data is slightly different, probably due to when the data is pulled out of the ICE chain
+    # assert np.all(np.isclose(nii.get_fdata(), nii_expected.get_fdata(), atol=1))
+    fname_expected_json = os.path.join(path_dataset, "nii", f"{file_name_expected_nii}.json")
+    fname_json = os.path.join(path_output, f"{file_name_converted_nii}.json")
     verify_sidecar(fname_json, fname_expected_json, skip_tags=["AcquisitionTime"])
 
 
@@ -63,14 +64,15 @@ def test_mrd2nii_dset2():
                         catch_exceptions=False)
 
     assert res.exit_code == 0, f"Error: {res.exit_code} - {res.output}"
-    nii = nib.load(os.path.join(path_output, "160_ep2d_bold_shimming_magnitude_echo-1.nii.gz"))
-    expected_affine = [[-2.45199919, -7.93683483e-08, 5.05236149, 100.587128],
-                       [0.161766902, 2.55949664, 2.60471988, -146.346985],
-                       [0.862099826, -0.480271578, 13.8812542, -70.0200882],
-                       [0.0, 0.0, 0.0, 1.0]]
-    assert np.all(np.isclose(nii.affine, expected_affine))
-    fname_expected_json = os.path.join(path_dataset, "nii", "095_dicom_rot_ep2d_bold_shimming_20250415120524.json")
-    fname_json = os.path.join(path_output, "160_ep2d_bold_shimming_magnitude_echo-1.json")
+    file_name_converted_nii = "160_ep2d_bold_shimming_magnitude_echo-1"
+    file_name_expected_nii = "095_dicom_rot_ep2d_bold_shimming_20250415120524"
+    nii = nib.load(os.path.join(path_output, f"{file_name_converted_nii}.nii.gz"))
+    nii_expected = nib.load(os.path.join(path_dataset, "nii", f"{file_name_expected_nii}.nii.gz"))
+    assert np.all(np.isclose(nii.affine, nii_expected.affine))
+    # The data is slightly different, probably due to when the data is pulled out of the ICE chain
+    # assert np.all(np.isclose(nii.get_fdata(), nii_expected.get_fdata(), atol=1))
+    fname_expected_json = os.path.join(path_dataset, "nii", f"{file_name_expected_nii}.json")
+    fname_json = os.path.join(path_output, f"{file_name_converted_nii}.json")
     verify_sidecar(fname_json, fname_expected_json)
 
 
@@ -118,16 +120,13 @@ def test_mrd2nii_dset4():
                         catch_exceptions=False)
 
     assert res.exit_code == 0, f"Error: {res.exit_code} - {res.output}"
-    nii = nib.load(os.path.join(path_output, "134_ep2d_bold_ST_shim_nomad_1.1x1.1_magnitude_echo-1.nii.gz"))
-
-    expected_affine = [[-1.125, 0, 0, 126],
-                       [0, 1.09350049, 3.52468681, -103.258766],
-                       [0, -0.264351517, 14.58, -65.0683289],
-                       [0, 0, 0, 1]]
-    assert np.all(np.isclose(nii.affine, expected_affine, atol=1e-5))
-    fname_expected_json = os.path.join(path_dataset, "nii",
-                                       "077_dicoms_ep2d_bold_ST_shim_nomad_1.1x1.1_20250811095729.json")
-    fname_json = os.path.join(path_output, "134_ep2d_bold_ST_shim_nomad_1.1x1.1_magnitude_echo-1.json")
+    file_name_converted_nii = "134_ep2d_bold_ST_shim_nomad_1.1x1.1_magnitude_echo-1"
+    file_name_expected_nii = "077_dicoms_ep2d_bold_ST_shim_nomad_1.1x1.1_20250811095729"
+    nii = nib.load(os.path.join(path_output, f"{file_name_converted_nii}.nii.gz"))
+    nii_expected = nib.load(os.path.join(path_dataset, "nii", f"{file_name_expected_nii}.nii.gz"))
+    assert np.all(np.isclose(nii.affine, nii_expected.affine, atol=1e-5))
+    fname_expected_json = os.path.join(path_dataset, "nii", f"{file_name_expected_nii}.json")
+    fname_json = os.path.join(path_output, f"{file_name_converted_nii}.json")
     verify_sidecar(fname_json, fname_expected_json, skip_tags=["PhaseEncodingSteps"])
 
 
@@ -152,21 +151,18 @@ def test_mrd2nii_dset5():
                         catch_exceptions=False)
 
     assert res.exit_code == 0, f"Error: {res.exit_code} - {res.output}"
-    nii = nib.load(os.path.join(path_output, "31_ep2d_bold_ST_shim_nomad_5vols_magnitude_echo-1.nii.gz"))
-
-    expected_affine = [[-2.60416675, 0, 0, 125],
-                       [0, 2.60416675, 0, -114.97956085],
-                       [0, 0, 15, -79.17463684],
-                       [0, 0, 0, 1]]
-    assert np.all(np.isclose(nii.affine, expected_affine, atol=1e-5))
-    fname_expected_json = os.path.join(path_dataset, "nii",
-                                       "008_dicoms_ep2d_bold_ST_shim_nomad_5vols_20250811095729.json")
-    fname_json = os.path.join(path_output, "31_ep2d_bold_ST_shim_nomad_5vols_magnitude_echo-1.json")
+    file_name_converted_nii = "31_ep2d_bold_ST_shim_nomad_5vols_magnitude_echo-1"
+    file_name_expected_nii = "008_dicoms_ep2d_bold_ST_shim_nomad_5vols_20250811095729"
+    nii = nib.load(os.path.join(path_output, f"{file_name_converted_nii}.nii.gz"))
+    nii_expected = nib.load(os.path.join(path_dataset, "nii", f"{file_name_expected_nii}.nii.gz"))
+    assert np.all(np.isclose(nii.affine, nii_expected.affine, atol=1e-5))
+    fname_expected_json = os.path.join(path_dataset, "nii", f"{file_name_expected_nii}.json")
+    fname_json = os.path.join(path_output, f"{file_name_converted_nii}.json")
     verify_sidecar(fname_json, fname_expected_json, skip_tags=["PhaseEncodingSteps"])
 
 
 def test_mrd2nii_dset6():
-    """Test MRD to NIfTI conversion for dataset 5. Localizer with multiple stacks"""
+    """Test MRD to NIfTI conversion for dataset 5. Localizer with multiple stacks."""
 
     path_dataset = os.path.join(__dir_testing__, "dset6")
     # Define the path to the MRD file and output directory
@@ -186,15 +182,6 @@ def test_mrd2nii_dset6():
 
     assert res.exit_code == 0, f"Error: {res.exit_code} - {res.output}"
     # nii = nib.load(os.path.join(path_output, "31_ep2d_bold_ST_shim_nomad_5vols_magnitude_echo-0.nii.gz"))
-    #
-    # expected_affine = [[-2.60416675, 0, 0, 125],
-    #                    [0, 2.60416675, 0, -114.97956085],
-    #                    [0, 0, 15, -79.17463684],
-    #                    [0, 0, 0, 1]]
-    # assert np.all(np.isclose(nii.affine, expected_affine, atol=1e-5))
-    # fname_expected_json = os.path.join(path_dataset, "nii", "008_dicoms_ep2d_bold_ST_shim_nomad_5vols_20250811095729.json")
-    # fname_json = os.path.join(path_output, "31_ep2d_bold_ST_shim_nomad_5vols_magnitude_echo-0.json")
-    # verify_sidecar(fname_json, fname_expected_json, skip_tags=["PhaseEncodingSteps"])
 
 
 def test_mrd2nii_dset7():
@@ -217,15 +204,13 @@ def test_mrd2nii_dset7():
                         catch_exceptions=False)
 
     assert res.exit_code == 0, f"Error: {res.exit_code} - {res.output}"
-    nii = nib.load(os.path.join(path_output, "77_T1w_magnitude_echo-1.nii.gz"))
-
-    expected_affine = [[1, 0, 0, -95.5],
-                       [0, 1, 0, -116.39276886],
-                       [0, 0, 1, -163.78071594],
-                       [0, 0, 0, 1]]
-    assert np.all(np.isclose(nii.affine, expected_affine, atol=1e-5))
-    fname_expected_json = os.path.join(path_dataset, "nii", "005_dicoms_T1w_20250827110428.json")
-    fname_json = os.path.join(path_output, "77_T1w_magnitude_echo-1.json")
+    file_name_converted_nii = "77_T1w_magnitude_echo-1"
+    file_name_expected_nii = "005_dicoms_T1w_20250827110428"
+    nii = nib.load(os.path.join(path_output, f"{file_name_converted_nii}.nii.gz"))
+    nii_expected = nib.load(os.path.join(path_dataset, "nii", f"{file_name_expected_nii}.nii.gz"))
+    assert np.all(np.isclose(nii.affine, nii_expected.affine, atol=1e-5))
+    fname_expected_json = os.path.join(path_dataset, "nii", f"{file_name_expected_nii}.json")
+    fname_json = os.path.join(path_output, f"{file_name_converted_nii}.json")
     verify_sidecar(fname_json, fname_expected_json, skip_tags=["SeriesDescription", "ImageType", "BaseResolution",
                                                                "ShimSetting", "ReceiveCoilName", "CoilString",
                                                                "PulseSequenceDetails", "ConsistencyInfo",
@@ -264,7 +249,7 @@ def test_mrd2nii_dset8():
                            [-0., 0.5, -0., -76.32299805],
                            [0., 0., 5., -53.36130142],
                            [0., 0., 0., 1.]]
-        assert np.allclose(nib.load(fname_mrd2nii_mag).affine, expected_affine, rtol=1e-5)
+        assert np.allclose(nib.load(fname_mrd2nii_mag).affine, nib.load(fname_dcm2niix_mag).affine, rtol=1e-5)
 
         fname_expected_json = os.path.join(path_dataset, "nii", f"{fname_prefix_dcm2niix}{i_echo}.json")
         fname_json = os.path.join(path_output, f"{fname_prefix_mrd2nii}{i_echo}.json")
@@ -281,6 +266,74 @@ def test_mrd2nii_dset8():
                                   "ScanningSequence", "AcquisitionTime"])
 
 
+def test_mrd2nii_dset9():
+    """Test MRD to NIfTI conversion for dataset 5. Single stack localizer."""
+
+    path_dataset = os.path.join(__dir_testing__, "dset9")
+    # Define the path to the MRD file and output directory
+    path_mrd = os.path.join(path_dataset, "mrd")
+    path_output = os.path.join(path_dataset, "mrd2nii")
+    if os.path.exists(path_output):
+        shutil.rmtree(path_output)
+
+    runner = CliRunner()
+
+    res = runner.invoke(mrd2nii_int,
+                        [
+                            '--input', path_mrd,
+                            '--output', path_output
+                        ],
+                        catch_exceptions=False)
+
+    assert res.exit_code == 0, f"Error: {res.exit_code} - {res.output}"
+    file_name_converted_nii = "27_localizer_for_segmentation_magnitude_echo-1"
+    file_name_expected_nii = "008_dicoms_localizer_for_segmentation_20250910123127"
+    nii = nib.load(os.path.join(path_output, f"{file_name_converted_nii}.nii.gz"))
+    nii_expected = nib.load(os.path.join(path_dataset, "nii", f"{file_name_expected_nii}.nii.gz"))
+    assert np.all(np.isclose(nii.affine, nii_expected.affine, atol=1e-5))
+    assert np.all(np.isclose(nii.get_fdata(), nii_expected.get_fdata(), atol=1))
+    fname_expected_json = os.path.join(path_dataset, "nii", f"{file_name_expected_nii}.json")
+    fname_json = os.path.join(path_output, f"{file_name_converted_nii}.json")
+    verify_sidecar(fname_json,
+                   fname_expected_json,
+                   skip_tags=["ScanningSequence", "ScanOptions", "ImageType", "BaseResolution", "ShimSetting",
+                              "ReceiveCoilName", "CoilString", "PulseSequenceDetails", "ConsistencyInfo",
+                              "PhaseEncodingSteps", "DerivedVendorReportedEchoSpacing", "RefLinesPE",
+                              "MRAcquisitionType", "FrequencyEncodingSteps", "AcquisitionMatrixPE"])
+
+
+def test_mrd2nii_dset10():
+    """Test MRD to NIfTI conversion for dataset 5. T1w"""
+
+    path_dataset = os.path.join(__dir_testing__, "dset10")
+    # Define the path to the MRD file and output directory
+    path_mrd = os.path.join(path_dataset, "mrd")
+    path_output = os.path.join(path_dataset, "mrd2nii")
+    if os.path.exists(path_output):
+        shutil.rmtree(path_output)
+
+    runner = CliRunner()
+
+    res = runner.invoke(mrd2nii_int,
+                        [
+                            '--input', path_mrd,
+                            '--output', path_output
+                        ],
+                        catch_exceptions=False)
+
+    assert res.exit_code == 0, f"Error: {res.exit_code} - {res.output}"
+    file_name_converted_nii = "19_T1w_magnitude_echo-1"
+    file_name_expected_nii = "002_dicoms_T1w_20250910123127"
+    nii = nib.load(os.path.join(path_output, f"{file_name_converted_nii}.nii.gz"))
+    nii_expected = nib.load(os.path.join(path_dataset, "nii", f"{file_name_expected_nii}.nii.gz"))
+    assert np.all(np.isclose(nii.affine, nii_expected.affine, atol=1e-5))
+    fname_expected_json = os.path.join(path_dataset, "nii", f"{file_name_expected_nii}.json")
+    fname_json = os.path.join(path_output, f"{file_name_converted_nii}.json")
+    verify_sidecar(fname_json, fname_expected_json, skip_tags=["SeriesDescription", "ImageType", "BaseResolution",
+                                                               "ShimSetting", "ReceiveCoilName", "CoilString",
+                                                               "PulseSequenceDetails", "ConsistencyInfo",
+                                                               "PhaseEncodingSteps", "DerivedVendorReportedEchoSpacing",
+                                                               "RefLinesPE", "MRAcquisitionType"])
 
 
 def verify_sidecar(fname_sidecar, fname_expected_sidecar, skip_tags=None):

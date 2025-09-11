@@ -512,13 +512,7 @@ def extract_slice_timing_ice_mini_hdr(metadata, img_metas, volume_images):
         return []
 
     # Extract ordering
-    mrd_idx_to_order_idx = {}
-
-    for param in metadata.userParameters.userParameterLong:
-        if param.name.startswith("RelativeSliceNumber_"):
-            i_slice = int(param.name.split("_")[-1]) - 1
-            mrd_idx_to_order_idx[i_slice] = int(param.value)
-
+    mrd_idx_to_order_idx = extract_mrd_index_to_prot_sli_number(volume_images)
     slice_timing = [0 for _ in range(nb_slices)]
 
     def convert_acq_time_string_to_s_past_midnight(acq_time: str):

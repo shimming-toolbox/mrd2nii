@@ -10,7 +10,8 @@ import ismrmrd
 import nibabel as nib
 import numpy as np
 
-from mrd2nii.sidecar import create_bids_sidecar, read_vendor_header_img
+from mrd2nii.sidecar import (create_bids_sidecar, read_vendor_header_img, extract_prot_sli_number_to_mrd_index,
+                             extract_mrd_index_to_prot_sli_number)
 
 
 def mrd2nii_dset(dset: ismrmrd.Dataset, output_dir):
@@ -213,20 +214,14 @@ def mrd2nii_volume(metadata, volume_images, skip_sidecar=False):
             if not np.allclose(tmp, rotm):
                 raise NotImplementedError("Acquisition with multiple stacks are not supported yet.")
 
-    mrd_idx_to_order_idx = {}
-    order_idx_to_mrd_idx = {}
-
     if metadata.encoding[0].reconSpace.matrixSize.z != 1:
         is_3d = True
         order_idx_to_mrd_idx = {i: i for i in range(nb_slices)}
         mrd_idx_to_order_idx = {i: i for i in range(nb_slices)}
     else:
         is_3d = False
-        for param in metadata.userParameters.userParameterLong:
-            if param.name.startswith("RelativeSliceNumber_"):
-                i_slice = int(param.name.split("_")[-1]) - 1
-                order_idx_to_mrd_idx[int(param.value)] = i_slice
-                mrd_idx_to_order_idx[i_slice] = int(param.value)
+        order_idx_to_mrd_idx = extract_prot_sli_number_to_mrd_index(volume_images)
+        mrd_idx_to_order_idx = extract_mrd_index_to_prot_sli_number(volume_images)
 
     logging.info(f"mrd_idx_to_order_idx: {mrd_idx_to_order_idx}")
     logging.info(f"order_idx_to_mrd_idx: {order_idx_to_mrd_idx}")
