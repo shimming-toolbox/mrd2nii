@@ -7,7 +7,7 @@ dynamic = ["version"]
 name = "mrd2nii"
 dependencies = [
     "click",
-    "ismrmrd",
+    "ismrmrd==1.14.1",
     "nibabel",
     "pytest"
 ]
