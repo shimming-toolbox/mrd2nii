@@ -252,6 +252,7 @@ def mrd2nii_volume(metadata, volume_images, skip_sidecar=False):
     mrd_dims_to_nii_dims = np.argsort([get_main_dir(volume_images[0].getHead().read_dir[:]),
                                        get_main_dir(volume_images[0].getHead().phase_dir[:]),
                                        get_main_dir(volume_images[0].getHead().slice_dir[:])])
+    nii_dims_to_mrd_dims = np.argsort(mrd_dims_to_nii_dims)
 
     matrix = [metadata.encoding[0].reconSpace.matrixSize.x,
               metadata.encoding[0].reconSpace.matrixSize.y,
@@ -282,10 +283,12 @@ def mrd2nii_volume(metadata, volume_images, skip_sidecar=False):
         pix_dim = [
             fov[0] / matrix[0],
             fov[1] / matrix[1],
-            fovz_missing_edges / (matrix[2] - 1)]
+            fov[2] / matrix[2]]
+        # The fovz_missing_edges is still in mrd coordinates
+        pix_dim[nii_dims_to_mrd_dims[2]] = fovz_missing_edges / (matrix[nii_dims_to_mrd_dims[2]] - 1)
 
         # Add the missing pixel now that we know the pixdim (including slice gap)
-        fov[2] = fovz_missing_edges + pix_dim[2]
+        fov[nii_dims_to_mrd_dims[2]] = fovz_missing_edges + pix_dim[nii_dims_to_mrd_dims[2]]
 
     affine = np.zeros((4, 4))
     affine[:3, 0] = pix_dim[0] * rotm[:, 0]
@@ -312,7 +315,7 @@ def mrd2nii_volume(metadata, volume_images, skip_sidecar=False):
     if get_main_dir(volume_images[0].meta['ImageSliceNormDir']) == 2:
         mid_voxel_index += np.array((0, 1, 0.5))
     elif get_main_dir(volume_images[0].meta['ImageSliceNormDir']) == 1:
-        raise NotImplementedError("This orientation has not been validated yet")
+        mid_voxel_index += np.array((0, 0.5, 1))
     elif get_main_dir(volume_images[0].meta['ImageSliceNormDir']) == 0:
         mid_voxel_index += np.array((-0.5, 1, 1))
     else:
@@ -332,10 +335,6 @@ def mrd2nii_volume(metadata, volume_images, skip_sidecar=False):
     # Not entirely sure what is going on, it works experimentally
     affine[:2, :] *= -1
     affine[:, 1:3] *= -1
-
-    if get_main_dir(volume_images[0].meta['ImageSliceNormDir']) == 0:
-        # Don't know why *-1, maybe check slice ordering
-        affine[0, :] *= -1
 
     logging.debug(f"Translation idxbeg: {[i for i in volume_images[idxbeg_in_volume_images].getHead().position]}")
     logging.debug(f"Translation idxend: {[i for i in volume_images[idxend_in_volume_images].getHead().position]}")
@@ -368,8 +367,9 @@ def mrd2nii_volume(metadata, volume_images, skip_sidecar=False):
             datatmp = np.transpose(datatmp, (1, 0))
             data[:, :, mrd_idx_to_order_idx[slice], repetition] = datatmp
         elif get_main_dir(volume.meta['ImageSliceNormDir']) == 1:
-            raise NotImplementedError("This orientation has not been validated yet")
-            # data[:, mrd_idx_to_order_idx[slice], :, repetition] = datatmp
+            datatmp = np.flip(volume.data[0, 0, :, :], 0)
+            datatmp = np.transpose(datatmp, (1, 0))
+            data[:, mrd_idx_to_order_idx[slice], :, repetition] = datatmp
         elif get_main_dir(volume.meta['ImageSliceNormDir']) == 0:
             datatmp = np.flip(volume.data[0, 0, :, :], 1)
             datatmp = np.flip(datatmp, 0)
@@ -381,17 +381,53 @@ def mrd2nii_volume(metadata, volume_images, skip_sidecar=False):
     if data.shape[-1] == 1:
         data = np.squeeze(data, axis=-1)
 
-    nii = nib.Nifti1Image(data, affine=affine)
-    if len(nii.shape) > 3:
-        nii.header.set_xyzt_units("mm", "sec")
+    nii_tmp = nib.Nifti1Image(data, affine=affine)
+    nii_tmp.header.set_dim_info(*mrd_dims_to_nii_dims)
+    if len(nii_tmp.shape) > 3:
+        nii_tmp.header.set_xyzt_units("mm", "sec")
     else:
-        nii.header.set_xyzt_units("mm")
+        nii_tmp.header.set_xyzt_units("mm")
 
-    nii.header.set_qform(affine, code=1)
-    nii.header.set_sform(affine, code=1)
+    nii_tmp.header.set_qform(affine, code=1)
+    nii_tmp.header.set_sform(affine, code=1)
+
+    ornt_in = nib.orientations.axcodes2ornt(nib.orientations.aff2axcodes(nii_tmp.affine))
+    if get_main_dir(volume.meta['ImageSliceNormDir']) == 2:
+        ornt_out = nib.orientations.axcodes2ornt(('L', 'A', 'S'))
+        ornt = nib.orientations.ornt_transform(ornt_in, ornt_out)
+        nii = nii_tmp.as_reoriented(ornt)
+        # Looks like there is a bug in nibabel and dim info is not set correctly, we patch it here
+        new_dim_info = [None, None, None]
+        for i in range(3):
+            new_dim_info[int(ornt[i, 0])] = nii_tmp.header.get_dim_info()[i]
+        nii.header.set_dim_info(*new_dim_info)
+    elif get_main_dir(volume.meta['ImageSliceNormDir']) == 1:
+        ornt_out = nib.orientations.axcodes2ornt(('L', 'S', 'P'))
+        ornt = nib.orientations.ornt_transform(ornt_in, ornt_out)
+        nii = nii_tmp.as_reoriented(ornt)
+        # Looks like there is a bug in nibabel and dim info is not set correctly, we patch it here
+        new_dim_info = [None, None, None]
+        for i in range(3):
+            new_dim_info[int(ornt[i, 0])] = nii_tmp.header.get_dim_info()[i]
+        nii.header.set_dim_info(*new_dim_info)
+    elif get_main_dir(volume.meta['ImageSliceNormDir']) == 0:
+        ornt_out = nib.orientations.axcodes2ornt(('P', 'S', 'R'))
+        ornt = nib.orientations.ornt_transform(ornt_in, ornt_out)
+        nii = nii_tmp.as_reoriented(ornt)
+        # Looks like there is a bug in nibabel and dim info is not set correctly, we patch it here
+        new_dim_info = [None, None, None]
+        for i in range(3):
+            new_dim_info[int(ornt[i, 0])] = nii_tmp.header.get_dim_info()[i]
+        nii.header.set_dim_info(*new_dim_info)
+    else:
+        raise RuntimeError("Slice direction not recognized")
 
     if not skip_sidecar:
         sidecar = create_bids_sidecar(metadata, a_volume_image)
+        if sidecar.get('SliceTiming') is not None:
+            # Reorder slice timing if we needed to flip it when creating the Nifti
+            if get_main_dir(volume.meta['ImageSliceNormDir']) == 0:
+                sidecar['SliceTiming'] = sidecar['SliceTiming'][::-1]
     else:
         sidecar = None
 
@@ -410,6 +446,7 @@ def mrd2nii_stack(metadata, image, include_slice_gap=True):
     mrd_dims_to_nii_dims = np.argsort([get_main_dir(image.getHead().read_dir[:]),
                                        get_main_dir(image.getHead().phase_dir[:]),
                                        get_main_dir(image.getHead().slice_dir[:])])
+    nii_dims_to_mrd_dims = np.argsort(mrd_dims_to_nii_dims)
 
     matrix = [metadata.encoding[0].reconSpace.matrixSize.x,
               metadata.encoding[0].reconSpace.matrixSize.y,
@@ -426,7 +463,7 @@ def mrd2nii_stack(metadata, image, include_slice_gap=True):
 
         slice_gap = vendor_header.get('SpacingBetweenSlices')
         if slice_gap is not None:
-            fov[2] = slice_gap
+            fov[nii_dims_to_mrd_dims[2]] = slice_gap
 
     pix_dim = [
         fov[0] / matrix[0],
@@ -452,7 +489,7 @@ def mrd2nii_stack(metadata, image, include_slice_gap=True):
     if get_main_dir(image.meta['ImageSliceNormDir']) == 2:
         mid_voxel_index += np.array((0, 1, 0.5))
     elif get_main_dir(image.meta['ImageSliceNormDir']) == 1:
-        raise NotImplementedError("This orientation has not been validated yet")
+        mid_voxel_index += np.array((0, 0.5, 1))
     elif get_main_dir(image.meta['ImageSliceNormDir']) == 0:
         mid_voxel_index += np.array((-0.5, 1, 1))
     else:
@@ -472,11 +509,6 @@ def mrd2nii_stack(metadata, image, include_slice_gap=True):
     affine[:2, :] *= -1
     affine[:, 1:3] *= -1
 
-    if get_main_dir(image.meta['ImageSliceNormDir']) == 0:
-        # Don't know why *-1, maybe check slice ordering
-        affine[0, :] *= -1
-        affine[0, 3] *= -1
-
     logging.debug(f"pix_dim: {pix_dim}")
     logging.debug(f"rotm: {rotm}")
     logging.debug(f"matrix size: {matrix}")
@@ -492,8 +524,9 @@ def mrd2nii_stack(metadata, image, include_slice_gap=True):
         datatmp = np.transpose(datatmp, (1, 0))
         data[:, :, 0] = datatmp
     elif get_main_dir(image.meta['ImageSliceNormDir']) == 1:
-        raise NotImplementedError("This orientation has not been validated yet")
-        # data[:, mrd_idx_to_order_idx[slice], :, repetition] = datatmp
+        datatmp = np.flip(image.data[0, 0, :, :], 0)
+        datatmp = np.transpose(datatmp, (1, 0))
+        data[:, 0, :] = datatmp
     elif get_main_dir(image.meta['ImageSliceNormDir']) == 0:
         datatmp = np.flip(image.data[0, 0, :, :], 1)
         datatmp = np.flip(datatmp, 0)
@@ -505,14 +538,46 @@ def mrd2nii_stack(metadata, image, include_slice_gap=True):
     if data.shape[-1] == 1:
         data = np.squeeze(data, axis=-1)
 
-    nii = nib.Nifti1Image(data, affine=affine)
-    if len(nii.shape) > 3:
-        nii.header.set_xyzt_units("mm", "sec")
+    nii_tmp = nib.Nifti1Image(data, affine=affine)
+    nii_tmp.header.set_dim_info(*mrd_dims_to_nii_dims)
+    if len(nii_tmp.shape) > 3:
+        nii_tmp.header.set_xyzt_units("mm", "sec")
     else:
-        nii.header.set_xyzt_units("mm")
+        nii_tmp.header.set_xyzt_units("mm")
 
-    nii.header.set_qform(affine, code=1)
-    nii.header.set_sform(affine, code=1)
+    nii_tmp.header.set_qform(affine, code=1)
+    nii_tmp.header.set_sform(affine, code=1)
+
+    ornt_in = nib.orientations.axcodes2ornt(nib.orientations.aff2axcodes(nii_tmp.affine))
+    if get_main_dir(image.meta['ImageSliceNormDir']) == 2:
+        ornt_out = nib.orientations.axcodes2ornt(('L', 'A', 'S'))
+        ornt = nib.orientations.ornt_transform(ornt_in, ornt_out)
+        nii = nii_tmp.as_reoriented(ornt)
+        # Looks like there is a bug in nibabel and dim info is not set correctly, we patch it here
+        new_dim_info = [None, None, None]
+        for i in range(3):
+            new_dim_info[int(ornt[i, 0])] = nii_tmp.header.get_dim_info()[i]
+        nii.header.set_dim_info(*new_dim_info)
+    elif get_main_dir(image.meta['ImageSliceNormDir']) == 1:
+        ornt_out = nib.orientations.axcodes2ornt(('L', 'S', 'P'))
+        ornt = nib.orientations.ornt_transform(ornt_in, ornt_out)
+        nii = nii_tmp.as_reoriented(ornt)
+        # Looks like there is a bug in nibabel and dim info is not set correctly, we patch it here
+        new_dim_info = [None, None, None]
+        for i in range(3):
+            new_dim_info[int(ornt[i, 0])] = nii_tmp.header.get_dim_info()[i]
+        nii.header.set_dim_info(*new_dim_info)
+    elif get_main_dir(image.meta['ImageSliceNormDir']) == 0:
+        ornt_out = nib.orientations.axcodes2ornt(('P', 'S', 'R'))
+        ornt = nib.orientations.ornt_transform(ornt_in, ornt_out)
+        nii = nii_tmp.as_reoriented(ornt)
+        # Looks like there is a bug in nibabel and dim info is not set correctly, we patch it here
+        new_dim_info = [None, None, None]
+        for i in range(3):
+            new_dim_info[int(ornt[i, 0])] = nii_tmp.header.get_dim_info()[i]
+        nii.header.set_dim_info(*new_dim_info)
+    else:
+        raise RuntimeError("Slice direction not recognized")
 
     return nii
 
