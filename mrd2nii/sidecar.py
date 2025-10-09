@@ -48,7 +48,7 @@ def create_bids_sidecar(metadata, volume_images):
         "SliceThickness": volume_images[0].getHead().field_of_view[2],
         "SpacingBetweenSlices": img_metas[0].get("SpacingBetweenSlices"),
         "TablePosition": [],
-        "EchoNumber": img_metas[0].get("EchoNumber") if metadata.encoding[0].encodingLimits.contrast.maximum > 1 else None,
+        "EchoNumber": img_metas[0].get("EchoNumber") if metadata.encoding[0].encodingLimits.contrast.maximum > 0 else None,
         "EchoTime": None,
         "RepetitionTime": None,
         # "MTState": "",
@@ -167,12 +167,16 @@ def extract_scan_options(metadata, vendor_header):
 
 
 def extract_acq_type(metadata):
-    if metadata.encoding[0].trajectoryDescription is None:
-        return None
-    if "2D" in metadata.encoding[0].trajectoryDescription.comment:
-        return "2D"
-    elif "3D" in metadata.encoding[0].trajectoryDescription.comment:
-        return "3D"
+    if metadata.encoding[0].trajectoryDescription is not None:
+        if "2D" in metadata.encoding[0].trajectoryDescription.comment:
+            return "2D"
+        elif "3D" in metadata.encoding[0].trajectoryDescription.comment:
+            return "3D"
+    else:
+        if metadata.encoding[0].encodingLimits.kspace_encoding_step_2.maximum > 0:
+            return "3D"
+        else:
+            return "2D"
 
 
 def extract_image_orientation_patient_dicom(image):
@@ -478,8 +482,12 @@ def extract_dwell_time(metadata):
 def extract_vendor_echo_spacing(metadata):
     if len(metadata.sequenceParameters.echo_spacing) >= 2:
         raise NotImplementedError("Conversion for multiple echo_spacings is not supported")
+    echo_spacing = metadata.sequenceParameters.echo_spacing[0] / 1000
 
-    return metadata.sequenceParameters.echo_spacing[0] / 1000
+    if echo_spacing == 0:
+        return None
+
+    return echo_spacing
 
 
 def extract_tr(metadata):
