@@ -47,25 +47,29 @@ def mrd2nii_dset(dset: ismrmrd.Dataset, output_dir):
             # acq.data
 
         elif group.startswith('image_') or group.startswith('images_'):
-            for i_img in range(0, dset.number_of_images(group)):
-                image = dset.read_image(group, i_img)
+            stacks = extract_in_stacks(dset, group)
+            for i_stack, stack in enumerate(stacks):
+                for i_img in range(len(stack)):
+                    image = stack[i_img]
+                    acq_name = f"{image.getHead().measurement_uid}"
+                    # Can't use: read_vendor_header_img(image)['AcquisitionNumber']
+                    # Numbering seems wrong
+                    acq_name += f"_{metadata.measurementInformation.protocolName}"
+                    if len(stacks) > 1:
+                        acq_name += f"_stack-{i_stack + 1}"
+                    if image.getHead().image_type == ismrmrd.IMTYPE_MAGNITUDE:
+                        acq_name += "_magnitude"
+                    elif image.getHead().image_type == ismrmrd.IMTYPE_PHASE:
+                        acq_name += "_phase"
+                    else:
+                        raise NotImplementedError(f"Image type {image.getHead().image_type} not implemented")
 
-                acq_name = f"{image.getHead().measurement_uid}"
-                acq_name += f"_{metadata.measurementInformation.protocolName}"
+                    acq_name += f"_echo-{image.getHead().contrast + 1}"
 
-                if image.getHead().image_type == ismrmrd.IMTYPE_MAGNITUDE:
-                    acq_name += "_magnitude"
-                elif image.getHead().image_type == ismrmrd.IMTYPE_PHASE:
-                    acq_name += "_phase"
-                else:
-                    raise NotImplementedError(f"Image type {image.getHead().image_type} not implemented")
+                    if acq_name not in files_output:
+                        files_output[acq_name] = []
 
-                acq_name += f"_echo-{image.getHead().contrast + 1}"
-
-                if acq_name not in files_output:
-                    files_output[acq_name] = []
-
-                files_output[acq_name].append(image)
+                    files_output[acq_name].append(image)
 
     # Create output directory
     os.makedirs(output_dir, exist_ok=True)
@@ -86,6 +90,31 @@ def mrd2nii_dset(dset: ismrmrd.Dataset, output_dir):
         fname_json = os.path.join(output_dir, f"{acq_name}.json")
         with open(fname_json, 'w', encoding='utf-8') as f:
             json.dump(sidecar, f, ensure_ascii=False, indent=4)
+
+
+def extract_in_stacks(dset, group):
+    """Extract images in stacks based on their rotation matrix.
+    A stack is defined as a set of image that creates a volume when combined together.
+    """
+    stacks = []
+    rotms = []
+    for i_img in range(0, dset.number_of_images(group)):
+        image = dset.read_image(group, i_img)
+        rotm = extract_rot_matrix(image)
+        # Check if we have a stack with the same rotation matrix
+        # Todo: This is not bullet proof, if stacks have the same rotation matrix but different locations
+        #  then this will fail to extract the stacks correctly.
+        found = False
+        for i_stack in range(len(rotms)):
+            if np.allclose(rotm, rotms[i_stack]):
+                stacks[i_stack].append(image)
+                found = True
+                break
+        # If we didn't find a matching stack, create a new one
+        if not found:
+            rotms.append(rotm)
+            stacks.append([image])
+    return stacks
 
 
 def process_waveforms(dset, path_output):
@@ -201,6 +230,14 @@ def mrd2nii_volume(metadata, volume_images, skip_sidecar=False):
     else:
         nb_slices = int(metadata.encoding[0].encodingLimits.slice.maximum) + 1
 
+    if len(volume_images) != nb_slices * nb_repetitions or len(volume_images) != nb_repetitions:
+        logging.warning(f"Number of images ({len(volume_images)}) does not match the expected number of images")
+        nb_slices = len(volume_images) // nb_repetitions
+
+        if len(volume_images) % nb_repetitions != 0:
+            raise RuntimeError("Error while extracting nb_slices from number of images and repetitions")
+
+
     if nb_slices <= 1:
         raise NotImplementedError("Single slice acquisitions are not supported yet")
 
@@ -228,7 +265,8 @@ def mrd2nii_volume(metadata, volume_images, skip_sidecar=False):
 
     # Find image on one edge of the FOV
     # Looks like the most inferior slice
-    sli_idx = order_idx_to_mrd_idx[0]
+    sli_idx = order_idx_to_mrd_idx[min(order_idx_to_mrd_idx.keys())]
+    # sli_idx = order_idx_to_mrd_idx[0]
     idxbeg_in_volume_images = -1
     for i, image in enumerate(volume_images):
         header = image.getHead()
@@ -238,7 +276,8 @@ def mrd2nii_volume(metadata, volume_images, skip_sidecar=False):
 
     # Find image on the other edge of the FOV
     # Looks like the most superior slice
-    sli_idx = order_idx_to_mrd_idx[nb_slices - 1]
+    sli_idx = order_idx_to_mrd_idx[max(order_idx_to_mrd_idx.keys())]
+    # sli_idx = order_idx_to_mrd_idx[nb_slices - 1]
     idxend_in_volume_images = -1
     for i, image in enumerate(volume_images):
         header = image.getHead()
@@ -248,6 +287,10 @@ def mrd2nii_volume(metadata, volume_images, skip_sidecar=False):
 
     if idxend_in_volume_images < 0 or idxbeg_in_volume_images < 0:
         raise RuntimeError("Can't find start or end idx in provided images")
+
+    # mrd_to_nifti_idx
+    mrd_idx_to_order_idx_cmp = compress_mapping(mrd_idx_to_order_idx, compress_keys=False, compress_values=True)
+    # order_idx_to_mrd_idx = compress_mapping(mrd_idx_to_order_idx, compress_keys=False, compress_values=True)
 
     mrd_dims_to_nii_dims = np.argsort([get_main_dir(volume_images[0].getHead().read_dir[:]),
                                        get_main_dir(volume_images[0].getHead().phase_dir[:]),
@@ -365,16 +408,16 @@ def mrd2nii_volume(metadata, volume_images, skip_sidecar=False):
         if get_main_dir(volume.meta['ImageSliceNormDir']) == 2:
             datatmp = np.flip(volume.data[0, 0, :, :], 0)
             datatmp = np.transpose(datatmp, (1, 0))
-            data[:, :, mrd_idx_to_order_idx[slice], repetition] = datatmp
+            data[:, :, mrd_idx_to_order_idx_cmp[slice], repetition] = datatmp
         elif get_main_dir(volume.meta['ImageSliceNormDir']) == 1:
             datatmp = np.flip(volume.data[0, 0, :, :], 0)
             datatmp = np.transpose(datatmp, (1, 0))
-            data[:, mrd_idx_to_order_idx[slice], :, repetition] = datatmp
+            data[:, mrd_idx_to_order_idx_cmp[slice], :, repetition] = datatmp
         elif get_main_dir(volume.meta['ImageSliceNormDir']) == 0:
             datatmp = np.flip(volume.data[0, 0, :, :], 1)
             datatmp = np.flip(datatmp, 0)
             datatmp = np.transpose(datatmp, (1, 0))
-            data[mrd_idx_to_order_idx[slice], :, :, repetition] = datatmp
+            data[mrd_idx_to_order_idx_cmp[slice], :, :, repetition] = datatmp
         else:
             raise RuntimeError("Slice direction not recognized")
 
@@ -617,3 +660,24 @@ def get_main_dir(dir_vector):
     for i, dir in enumerate(dir_vector):
         dir_vector[i] = float(dir)
     return np.argmax(np.abs(dir_vector))
+
+
+def compress_mapping(mapping, compress_keys=True, compress_values=True):
+    """Compress mapping to remove gaps in the order indices."""
+    # e.g.: {0: 6, 4: 5, 5: 7} -> {0: 1, 1: 0, 2: 2}
+    if compress_keys:
+        tmp_mapping = {}
+        for new_idx, old_idx in enumerate(sorted(mapping.keys())):
+            tmp_mapping[new_idx] = mapping[old_idx]
+    else:
+        tmp_mapping = mapping
+
+    if compress_values:
+        compressed_mapping = {}
+        sorted_values = sorted(tmp_mapping.values())
+        for key, value in tmp_mapping.items():
+            compressed_mapping[key] = sorted_values.index(value)
+    else:
+        compressed_mapping = tmp_mapping
+
+    return compressed_mapping
