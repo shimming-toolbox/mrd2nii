@@ -39,7 +39,7 @@ def create_bids_sidecar(metadata, volume_images):
         "PulseSequenceName": img_metas[0].get("SequenceString"),
         "ImageType": extract_image_type(img_metas[0]),
         # "ImageTypeText": [],
-        # "NonlinearGradientCorrection": "",
+        "NonlinearGradientCorrection": extract_non_lin_gradient_corr(img_metas[0]),
         # "SeriesNumber": volume_images[0].getHead().measurement_uid, not right
         # "SeriesNumber": "",
         "AcquisitionTime": extract_acq_time(img_metas[0]),
@@ -257,6 +257,15 @@ def extract_image_type(img_meta):
     if img_meta.get("ComplexImageComponent") is not None:
         image_type.append(img_meta.get("ComplexImageComponent"))
     return image_type
+
+
+def extract_non_lin_gradient_corr(img_meta):
+    list_im_type = img_meta.get("ImageTypeValue4")
+    if list_im_type is not None:
+        if 'DIS2D' in list_im_type or 'ND' in list_im_type:
+            return True
+    else:
+        return ""
 
 
 def read_vendor_header_img(image):
@@ -517,6 +526,10 @@ def extract_slice_timing_ice_mini_hdr(metadata, img_metas, volume_images):
     nb_slices = int(metadata.encoding[0].encodingLimits.slice.maximum) + 1
     if len(volume_images) != nb_slices:
         logging.warning("Number of slices in metadata does not correspond to number of images, not extracting slice timing")
+        return []
+
+    # Trivial case, if only one slice, no slice timing is necessary
+    if nb_slices == 1:
         return []
 
     # Extract ordering
