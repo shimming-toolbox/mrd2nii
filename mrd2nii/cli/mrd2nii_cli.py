@@ -32,10 +32,15 @@ def mrd2nii_int(path_mrd, path_output):
     else:
         raise ValueError(f"Input path is neither a folder nor a file: {path_mrd}")
 
+    n_files_converted = 0
     for file in list_files:
         if not os.path.splitext(file)[1] in [".mrd", ".h5"]:
             continue
 
+        n_files_converted += 1
         dset = ismrmrd.Dataset(os.path.join(path_mrd, file), dataset_name="dataset", create_if_needed=False)
         mrd2nii_dset(dset, path_output)
         dset.close()
+
+    if n_files_converted <= 0:
+        raise ValueError(f"No MRD files found in the input path: {path_mrd}")
