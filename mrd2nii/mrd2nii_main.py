@@ -209,8 +209,6 @@ def save_waveform_log_file(logfile_id, trace_ids, trace_names, data_wav, fname_o
 
 
 def mrd2nii_volume(metadata, volume_images, skip_sidecar=False):
-    # Todo: single slice acquisitions are not supported yet
-
     logging.info(volume_images[0].getHead())
 
     a_volume_image = []
@@ -236,10 +234,6 @@ def mrd2nii_volume(metadata, volume_images, skip_sidecar=False):
 
         if len(volume_images) % nb_repetitions != 0:
             raise RuntimeError("Error while extracting nb_slices from number of images and repetitions")
-
-
-    if nb_slices <= 1:
-        raise NotImplementedError("Single slice acquisitions are not supported yet")
 
     # Make sure all slices have the same encoding matrix
     rotm = None
