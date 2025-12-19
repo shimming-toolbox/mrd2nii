@@ -51,7 +51,8 @@ def verify_sidecar(fname_sidecar, fname_expected_sidecar, skip_tags=None):
         "ReconMatrixPE",
         "ParallelReductionFactorInPlane",
         "ParallelReductionFactorOutOfPlane",
-        "MRAcquisitionType"
+        "MRAcquisitionType",
+        "NonlinearGradientCorrection"
     ]
 
     with open(fname_sidecar, 'r', encoding='utf-8') as f:
