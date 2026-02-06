@@ -4,11 +4,12 @@
 import base64
 from datetime import datetime, timedelta, time
 import logging
-
 import ismrmrd
+import numpy as np
+import math
 
 
-def create_bids_sidecar(metadata, volume_images):
+def create_bids_sidecar(metadata, volume_images, dim_info=(None, None, None)):
 
     # Parse Mini hdr
     img_metas = []
@@ -85,7 +86,7 @@ def create_bids_sidecar(metadata, volume_images):
         # "TotalReadoutTime": None,
         # "PixelBandwidth": None,
         "DwellTime": None,
-        # "PhaseEncodingDirection": "",
+        "PhaseEncodingDirection": "",
         "SliceTiming": [],
         "ImageOrientationPatientDICOM": extract_image_orientation_patient_dicom(volume_images[0]),
         # "InPlanePhaseEncodingDirectionDICOM": "",
@@ -126,6 +127,7 @@ def create_bids_sidecar(metadata, volume_images):
             sidecar.pop("RefLinesPE")
         else:
             sidecar["RefLinesPE"] = int(vendor_header["sPat"].get("lRefLinesPE"))
+        sidecar['PhaseEncodingDirection'] = extract_phase_encoding_direction(volume_images[0], vendor_header, dim_info)
 
     # Todo: GRAPPA: sPat['ucPATMode']. Need to verify what a sense scan does
 
@@ -236,7 +238,6 @@ def extract_scanning_sequence(metadata):
     if len(seq_type) != 0:
         seq_type = seq_type[:-1]
     return seq_type
-
 
 
 def extract_device_serial_number(metadata):
@@ -630,3 +631,66 @@ def extract_prot_sli_number_to_mrd_index(volume_images):
         if meta.get("ProtocolSliceNumber") is not None:
             mapping[meta["ProtocolSliceNumber"]] = volume_images[i].getHead().slice
     return mapping
+
+
+def get_main_dir(dir_vector):
+    for i, dir in enumerate(dir_vector):
+        dir_vector[i] = float(dir)
+    return np.argmax(np.abs(dir_vector))
+
+
+def extract_phase_encoding_direction(volume_image, vendor_header, dim_info):
+    if dim_info == (None, None, None):
+        return ""
+
+    # These metadata contain the in-plane rotation information
+    # vendor_header.sSliceArray.asSlice[8].dInPlaneRot
+    # Vendor_metadata.sAAInitialOffset.SliceInformation.dInPlaneRot
+    if vendor_header.get("sAAInitialOffset") is None:
+        return ""
+    if vendor_header["sAAInitialOffset"].get("SliceInformation") is None:
+        return ""
+
+    # TRA
+    if get_main_dir(volume_image.meta["ImageSliceNormDir"]) == 2:
+        if vendor_header["sAAInitialOffset"]["SliceInformation"].get('dInPlaneRot') is None:
+            direction = "-"
+        elif np.isclose(float(vendor_header["sAAInitialOffset"]["SliceInformation"]['dInPlaneRot']), math.pi) or \
+            np.isclose(float(vendor_header["sAAInitialOffset"]["SliceInformation"]['dInPlaneRot']), -math.pi):
+            direction = ""
+        elif np.isclose(float(vendor_header["sAAInitialOffset"]["SliceInformation"]['dInPlaneRot']), math.pi / 2):
+            direction = ""
+        elif np.isclose(float(vendor_header["sAAInitialOffset"]["SliceInformation"]['dInPlaneRot']), -math.pi / 2):
+            direction = "-"
+        else:
+            raise NotImplementedError("In-plane rotation not supported for phase encoding direction extraction")
+    # SAG
+    elif get_main_dir(volume_image.meta["ImageSliceNormDir"]) == 1:
+        if vendor_header["sAAInitialOffset"]["SliceInformation"].get('dInPlaneRot') is None:
+            direction = ""
+        elif np.isclose(float(vendor_header["sAAInitialOffset"]["SliceInformation"]['dInPlaneRot']), math.pi):
+            direction = "-"
+        elif np.isclose(float(vendor_header["sAAInitialOffset"]["SliceInformation"]['dInPlaneRot']), math.pi / 2):
+            direction = ""
+        elif np.isclose(float(vendor_header["sAAInitialOffset"]["SliceInformation"]['dInPlaneRot']), -math.pi / 2):
+            direction = "-"
+        else:
+            raise NotImplementedError("In-plane rotation not supported for phase encoding direction extraction")
+    elif get_main_dir(volume_image.meta["ImageSliceNormDir"]) == 0:
+        if vendor_header["sAAInitialOffset"]["SliceInformation"].get('dInPlaneRot') is None:
+            direction = ""
+        elif np.isclose(float(vendor_header["sAAInitialOffset"]["SliceInformation"]['dInPlaneRot']), math.pi):
+            direction = "-"
+        elif np.isclose(float(vendor_header["sAAInitialOffset"]["SliceInformation"]['dInPlaneRot']), math.pi / 2):
+            direction = "-"
+        elif np.isclose(float(vendor_header["sAAInitialOffset"]["SliceInformation"]['dInPlaneRot']), -math.pi / 2):
+            direction = ""
+        else:
+            raise NotImplementedError("In-plane rotation not supported for phase encoding direction extraction")
+    else:
+        raise RuntimeError("Unknown ImageSliceNormDir value")
+
+    mapping = {0: 'i', 1: 'j', 2: 'k'}
+
+    # dim_info[1] is the axis of the phase encoding direction
+    return f"{mapping[dim_info[1]]}{direction}"

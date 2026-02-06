@@ -11,7 +11,7 @@ import nibabel as nib
 import numpy as np
 
 from mrd2nii.sidecar import (create_bids_sidecar, read_vendor_header_img, extract_prot_sli_number_to_mrd_index,
-                             extract_mrd_index_to_prot_sli_number)
+                             extract_mrd_index_to_prot_sli_number, get_main_dir)
 
 
 def mrd2nii_dset(dset: ismrmrd.Dataset, output_dir):
@@ -141,7 +141,7 @@ def process_waveforms(dset, path_output):
         waveform = dset.read_waveform(i_waveform)
         wav_header = waveform.getHead()
         if wav_header.waveform_id not in data_wav:
-            logging.warning(f"Waveform ID {wav_header.waveform_id} not recognized, skipping")
+            logging.debug(f"Waveform ID {wav_header.waveform_id} not recognized, skipping")
             continue
 
         if wav_header.number_of_samples == 0:
@@ -460,7 +460,7 @@ def mrd2nii_volume(metadata, volume_images, skip_sidecar=False):
         raise RuntimeError("Slice direction not recognized")
 
     if not skip_sidecar:
-        sidecar = create_bids_sidecar(metadata, a_volume_image)
+        sidecar = create_bids_sidecar(metadata, a_volume_image, new_dim_info)
         if sidecar.get('SliceTiming') is not None:
             # Reorder slice timing if we needed to flip it when creating the Nifti
             if get_main_dir(volume.meta['ImageSliceNormDir']) == 0:
@@ -650,10 +650,25 @@ def extract_n_encoding_directions(metadata):
     return cnt
 
 
-def get_main_dir(dir_vector):
-    for i, dir in enumerate(dir_vector):
-        dir_vector[i] = float(dir)
-    return np.argmax(np.abs(dir_vector))
+def compress_mapping(mapping, compress_keys=True, compress_values=True):
+    """Compress mapping to remove gaps in the order indices."""
+    # e.g.: {0: 6, 4: 5, 5: 7} -> {0: 1, 1: 0, 2: 2}
+    if compress_keys:
+        tmp_mapping = {}
+        for new_idx, old_idx in enumerate(sorted(mapping.keys())):
+            tmp_mapping[new_idx] = mapping[old_idx]
+    else:
+        tmp_mapping = mapping
+
+    if compress_values:
+        compressed_mapping = {}
+        sorted_values = sorted(tmp_mapping.values())
+        for key, value in tmp_mapping.items():
+            compressed_mapping[key] = sorted_values.index(value)
+    else:
+        compressed_mapping = tmp_mapping
+
+    return compressed_mapping
 
 
 def compress_mapping(mapping, compress_keys=True, compress_values=True):
