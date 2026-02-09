@@ -119,9 +119,8 @@ def create_bids_sidecar(metadata, volume_images, dim_info=(None, None, None)):
         sidecar["PulseSequenceDetails"] = vendor_header.get("tSequenceFileName")
         sidecar["BaseResolution"] = int(vendor_header["sKSpace"].get("lBaseResolution"))
         sidecar["ShimSetting"] = extract_shim_settings(vendor_header)
-        # sCoilSelectMeas.aRxCoilSelectData[0].asList[0].sCoilElementID.tCoilID
-        sidecar["ReceiveCoilName"] = vendor_header["sCoilSelectMeas"]["aRxCoilSelectData[0]"]["asList[0]"]["sCoilElementID"]["tCoilID"]
-        sidecar["CoilString"] = vendor_header["sCoilSelectMeas"]["aRxCoilSelectData[0]"]["asList[0]"]["sCoilElementID"]["tCoilID"]
+        sidecar["ReceiveCoilName"] = extract_receive_coil_name(vendor_header)
+        sidecar["CoilString"] = extract_coil_string(vendor_header)
         sidecar["ConsistencyInfo"] = vendor_header.get("ulVersion")
         if vendor_header["sPat"].get("lRefLinesPE") is None:
             sidecar.pop("RefLinesPE")
@@ -189,16 +188,52 @@ def extract_image_orientation_patient_dicom(image):
 
 
 def extract_shim_settings(vhdr_metadata):
-    return [
-        int(vhdr_metadata["sGRADSPEC"]["asGPAData[0]"]["lOffsetX"]),
-        int(vhdr_metadata["sGRADSPEC"]["asGPAData[0]"]["lOffsetY"]),
-        int(vhdr_metadata["sGRADSPEC"]["asGPAData[0]"]["lOffsetZ"]),
-        int(vhdr_metadata["sGRADSPEC"]["alShimCurrent[0]"]),
-        int(vhdr_metadata["sGRADSPEC"]["alShimCurrent[1]"]),
-        int(vhdr_metadata["sGRADSPEC"]["alShimCurrent[2]"]),
-        int(vhdr_metadata["sGRADSPEC"]["alShimCurrent[3]"]),
-        int(vhdr_metadata["sGRADSPEC"]["alShimCurrent[4]"])
-    ]
+    if vhdr_metadata.get("sGRADSPEC") is None:
+        return []
+
+    shim_settings = []
+    # Gradients (1st order)
+    if vhdr_metadata["sGRADSPEC"].get("asGPAData[0]") is None:
+        shim_settings = [None] * 3
+    else:
+        grad_names = ["lOffsetX", "lOffsetY", "lOffsetZ"]
+        for grad_name in grad_names:
+            if vhdr_metadata["sGRADSPEC"]["asGPAData[0]"].get(grad_name) is None:
+                shim_settings.append(None)
+            else:
+                shim_settings.append(int(vhdr_metadata["sGRADSPEC"]["asGPAData[0]"][grad_name]))
+
+    # 2nd order
+    for i in range(5):
+        if vhdr_metadata["sGRADSPEC"].get(f"alShimCurrent[{i}]") is None:
+            shim_settings.append(None)
+        else:
+            shim_settings.append(int(vhdr_metadata["sGRADSPEC"][f"alShimCurrent[{i}]"]))
+
+    # If it's an array of None, return empty list
+    if np.all([s is None for s in shim_settings]):
+        shim_settings = []
+
+    return shim_settings
+
+
+def extract_receive_coil_name(vhdr_metadata):
+    if vhdr_metadata.get("sCoilSelectMeas") is None:
+        return ""
+    if vhdr_metadata["sCoilSelectMeas"].get("aRxCoilSelectData[0]") is None:
+        return ""
+    if vhdr_metadata["sCoilSelectMeas"]["aRxCoilSelectData[0]"].get("asList[0]") is None:
+        return ""
+    if vhdr_metadata["sCoilSelectMeas"]["aRxCoilSelectData[0]"]["asList[0]"].get("sCoilElementID") is None:
+        return ""
+    if vhdr_metadata["sCoilSelectMeas"]["aRxCoilSelectData[0]"]["asList[0]"]["sCoilElementID"].get("tCoilID") is None:
+        return ""
+
+    return vhdr_metadata["sCoilSelectMeas"]["aRxCoilSelectData[0]"]["asList[0]"]["sCoilElementID"]["tCoilID"]
+
+
+def extract_coil_string(vhdr_metadata):
+    return extract_receive_coil_name(vhdr_metadata)
 
 
 def extract_acq_time(img_meta):
@@ -444,6 +479,7 @@ def read_vendor_header_img(image):
 
 
 def read_vendor_header_metadata(metadata):
+    """ I believe this is the measYaps data structure """
     vendor_header = None
     for param in metadata.userParameters.userParameterBase64:
         if param.name == "SiemensBuffer_PROTOCOL_MeasYaps":
