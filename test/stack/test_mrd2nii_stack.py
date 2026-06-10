@@ -7,7 +7,6 @@ import numpy as np
 import os
 
 from mrd2nii.mrd2nii_main import mrd2nii_stack
-from mrd2nii.nii_utils import orient_nii_to
 from mrd2nii import __dir_testing__
 
 
@@ -55,7 +54,7 @@ def test_mrd2nii_stack2():
     nii = mrd2nii_stack(metadata, image, include_slice_gap=True)
     nib.save(nii, fname_output)
     expected_affine = [[0, 0., 1., 45.5],
-                       [0., 1, 0., -116.39277077],
-                       [1., 0., 0, -163.78072289],
+                       [-1., 0., 0., 142.60722923],
+                       [0., 1., 0, -163.78072289],
                        [0., -0., 0., 1.]]
     assert np.allclose(nii.affine, expected_affine)

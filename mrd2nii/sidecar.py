@@ -4,11 +4,12 @@
 import base64
 from datetime import datetime, timedelta, time
 import logging
-
 import ismrmrd
+import numpy as np
+import math
 
 
-def create_bids_sidecar(metadata, volume_images):
+def create_bids_sidecar(metadata, volume_images, dim_info=(None, None, None)):
 
     # Parse Mini hdr
     img_metas = []
@@ -85,7 +86,7 @@ def create_bids_sidecar(metadata, volume_images):
         # "TotalReadoutTime": None,
         # "PixelBandwidth": None,
         "DwellTime": None,
-        # "PhaseEncodingDirection": "",
+        "PhaseEncodingDirection": "",
         "SliceTiming": [],
         "ImageOrientationPatientDICOM": extract_image_orientation_patient_dicom(volume_images[0]),
         # "InPlanePhaseEncodingDirectionDICOM": "",
@@ -118,14 +119,14 @@ def create_bids_sidecar(metadata, volume_images):
         sidecar["PulseSequenceDetails"] = vendor_header.get("tSequenceFileName")
         sidecar["BaseResolution"] = int(vendor_header["sKSpace"].get("lBaseResolution"))
         sidecar["ShimSetting"] = extract_shim_settings(vendor_header)
-        # sCoilSelectMeas.aRxCoilSelectData[0].asList[0].sCoilElementID.tCoilID
-        sidecar["ReceiveCoilName"] = vendor_header["sCoilSelectMeas"]["aRxCoilSelectData[0]"]["asList[0]"]["sCoilElementID"]["tCoilID"]
-        sidecar["CoilString"] = vendor_header["sCoilSelectMeas"]["aRxCoilSelectData[0]"]["asList[0]"]["sCoilElementID"]["tCoilID"]
+        sidecar["ReceiveCoilName"] = extract_receive_coil_name(vendor_header)
+        sidecar["CoilString"] = extract_coil_string(vendor_header)
         sidecar["ConsistencyInfo"] = vendor_header.get("ulVersion")
         if vendor_header["sPat"].get("lRefLinesPE") is None:
             sidecar.pop("RefLinesPE")
         else:
             sidecar["RefLinesPE"] = int(vendor_header["sPat"].get("lRefLinesPE"))
+        sidecar['PhaseEncodingDirection'] = extract_phase_encoding_direction(volume_images[0], vendor_header, dim_info)
 
     # Todo: GRAPPA: sPat['ucPATMode']. Need to verify what a sense scan does
 
@@ -187,16 +188,52 @@ def extract_image_orientation_patient_dicom(image):
 
 
 def extract_shim_settings(vhdr_metadata):
-    return [
-        int(vhdr_metadata["sGRADSPEC"]["asGPAData[0]"]["lOffsetX"]),
-        int(vhdr_metadata["sGRADSPEC"]["asGPAData[0]"]["lOffsetY"]),
-        int(vhdr_metadata["sGRADSPEC"]["asGPAData[0]"]["lOffsetZ"]),
-        int(vhdr_metadata["sGRADSPEC"]["alShimCurrent[0]"]),
-        int(vhdr_metadata["sGRADSPEC"]["alShimCurrent[1]"]),
-        int(vhdr_metadata["sGRADSPEC"]["alShimCurrent[2]"]),
-        int(vhdr_metadata["sGRADSPEC"]["alShimCurrent[3]"]),
-        int(vhdr_metadata["sGRADSPEC"]["alShimCurrent[4]"])
-    ]
+    if vhdr_metadata.get("sGRADSPEC") is None:
+        return []
+
+    shim_settings = []
+    # Gradients (1st order)
+    if vhdr_metadata["sGRADSPEC"].get("asGPAData[0]") is None:
+        shim_settings = [None] * 3
+    else:
+        grad_names = ["lOffsetX", "lOffsetY", "lOffsetZ"]
+        for grad_name in grad_names:
+            if vhdr_metadata["sGRADSPEC"]["asGPAData[0]"].get(grad_name) is None:
+                shim_settings.append(None)
+            else:
+                shim_settings.append(int(vhdr_metadata["sGRADSPEC"]["asGPAData[0]"][grad_name]))
+
+    # 2nd order
+    for i in range(5):
+        if vhdr_metadata["sGRADSPEC"].get(f"alShimCurrent[{i}]") is None:
+            shim_settings.append(None)
+        else:
+            shim_settings.append(int(vhdr_metadata["sGRADSPEC"][f"alShimCurrent[{i}]"]))
+
+    # If it's an array of None, return empty list
+    if np.all([s is None for s in shim_settings]):
+        shim_settings = []
+
+    return shim_settings
+
+
+def extract_receive_coil_name(vhdr_metadata):
+    if vhdr_metadata.get("sCoilSelectMeas") is None:
+        return ""
+    if vhdr_metadata["sCoilSelectMeas"].get("aRxCoilSelectData[0]") is None:
+        return ""
+    if vhdr_metadata["sCoilSelectMeas"]["aRxCoilSelectData[0]"].get("asList[0]") is None:
+        return ""
+    if vhdr_metadata["sCoilSelectMeas"]["aRxCoilSelectData[0]"]["asList[0]"].get("sCoilElementID") is None:
+        return ""
+    if vhdr_metadata["sCoilSelectMeas"]["aRxCoilSelectData[0]"]["asList[0]"]["sCoilElementID"].get("tCoilID") is None:
+        return ""
+
+    return vhdr_metadata["sCoilSelectMeas"]["aRxCoilSelectData[0]"]["asList[0]"]["sCoilElementID"]["tCoilID"]
+
+
+def extract_coil_string(vhdr_metadata):
+    return extract_receive_coil_name(vhdr_metadata)
 
 
 def extract_acq_time(img_meta):
@@ -236,7 +273,6 @@ def extract_scanning_sequence(metadata):
     if len(seq_type) != 0:
         seq_type = seq_type[:-1]
     return seq_type
-
 
 
 def extract_device_serial_number(metadata):
@@ -443,6 +479,7 @@ def read_vendor_header_img(image):
 
 
 def read_vendor_header_metadata(metadata):
+    """ I believe this is the measYaps data structure """
     vendor_header = None
     for param in metadata.userParameters.userParameterBase64:
         if param.name == "SiemensBuffer_PROTOCOL_MeasYaps":
@@ -630,3 +667,66 @@ def extract_prot_sli_number_to_mrd_index(volume_images):
         if meta.get("ProtocolSliceNumber") is not None:
             mapping[meta["ProtocolSliceNumber"]] = volume_images[i].getHead().slice
     return mapping
+
+
+def get_main_dir(dir_vector):
+    for i, dir in enumerate(dir_vector):
+        dir_vector[i] = float(dir)
+    return np.argmax(np.abs(dir_vector))
+
+
+def extract_phase_encoding_direction(volume_image, vendor_header, dim_info):
+    if dim_info == (None, None, None):
+        return ""
+
+    # These metadata contain the in-plane rotation information
+    # vendor_header.sSliceArray.asSlice[8].dInPlaneRot
+    # Vendor_metadata.sAAInitialOffset.SliceInformation.dInPlaneRot
+    if vendor_header.get("sAAInitialOffset") is None:
+        return ""
+    if vendor_header["sAAInitialOffset"].get("SliceInformation") is None:
+        return ""
+
+    # TRA
+    if get_main_dir(volume_image.meta["ImageSliceNormDir"]) == 2:
+        if vendor_header["sAAInitialOffset"]["SliceInformation"].get('dInPlaneRot') is None:
+            direction = "-"
+        elif np.isclose(float(vendor_header["sAAInitialOffset"]["SliceInformation"]['dInPlaneRot']), math.pi) or \
+            np.isclose(float(vendor_header["sAAInitialOffset"]["SliceInformation"]['dInPlaneRot']), -math.pi):
+            direction = ""
+        elif np.isclose(float(vendor_header["sAAInitialOffset"]["SliceInformation"]['dInPlaneRot']), math.pi / 2):
+            direction = ""
+        elif np.isclose(float(vendor_header["sAAInitialOffset"]["SliceInformation"]['dInPlaneRot']), -math.pi / 2):
+            direction = "-"
+        else:
+            raise NotImplementedError("In-plane rotation not supported for phase encoding direction extraction")
+    # SAG
+    elif get_main_dir(volume_image.meta["ImageSliceNormDir"]) == 1:
+        if vendor_header["sAAInitialOffset"]["SliceInformation"].get('dInPlaneRot') is None:
+            direction = ""
+        elif np.isclose(float(vendor_header["sAAInitialOffset"]["SliceInformation"]['dInPlaneRot']), math.pi):
+            direction = "-"
+        elif np.isclose(float(vendor_header["sAAInitialOffset"]["SliceInformation"]['dInPlaneRot']), math.pi / 2):
+            direction = ""
+        elif np.isclose(float(vendor_header["sAAInitialOffset"]["SliceInformation"]['dInPlaneRot']), -math.pi / 2):
+            direction = "-"
+        else:
+            raise NotImplementedError("In-plane rotation not supported for phase encoding direction extraction")
+    elif get_main_dir(volume_image.meta["ImageSliceNormDir"]) == 0:
+        if vendor_header["sAAInitialOffset"]["SliceInformation"].get('dInPlaneRot') is None:
+            direction = ""
+        elif np.isclose(float(vendor_header["sAAInitialOffset"]["SliceInformation"]['dInPlaneRot']), math.pi):
+            direction = "-"
+        elif np.isclose(float(vendor_header["sAAInitialOffset"]["SliceInformation"]['dInPlaneRot']), math.pi / 2):
+            direction = "-"
+        elif np.isclose(float(vendor_header["sAAInitialOffset"]["SliceInformation"]['dInPlaneRot']), -math.pi / 2):
+            direction = ""
+        else:
+            raise NotImplementedError("In-plane rotation not supported for phase encoding direction extraction")
+    else:
+        raise RuntimeError("Unknown ImageSliceNormDir value")
+
+    mapping = {0: 'i', 1: 'j', 2: 'k'}
+
+    # dim_info[1] is the axis of the phase encoding direction
+    return f"{mapping[dim_info[1]]}{direction}"
