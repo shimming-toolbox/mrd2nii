@@ -134,7 +134,7 @@ def test_mrd2nii_dset4():
 
 def test_mrd2nii_dset5():
     """Test MRD to NIfTI conversion for dataset 5. EPI GRAPPA"""
-    # Needed to use pos light marker instead of .position. This tag can also be sued to extract the table position
+    # Needed to use pos light marker instead of .position. This tag can also be used to extract the table position
 
     path_dataset = os.path.join(__dir_testing__, "dset5")
     # Define the path to the MRD file and output directory
@@ -164,7 +164,7 @@ def test_mrd2nii_dset5():
 
 
 def test_mrd2nii_dset6():
-    """Test MRD to NIfTI conversion for dataset 5. Localizer with multiple stacks."""
+    """Test MRD to NIfTI conversion for dataset 5. Localizer with multiple chuncks."""
 
     path_dataset = os.path.join(__dir_testing__, "dset6")
     # Define the path to the MRD file and output directory
@@ -183,12 +183,12 @@ def test_mrd2nii_dset6():
                         catch_exceptions=False)
 
     assert res.exit_code == 0
-    file_name_converted_nii = "64_Localizer_stack-1_magnitude_echo-1"
+    file_name_converted_nii = "64_Localizer_chunk-1_magnitude_echo-1"
     nii1 = nib.load(os.path.join(path_output, file_name_converted_nii + ".nii.gz"))
     fname_json = os.path.join(path_output, f"{file_name_converted_nii}.json")
     with open(fname_json, 'r') as f:
         json_data = f.read()
-    file_name_converted_nii = "64_Localizer_stack-2_magnitude_echo-1"
+    file_name_converted_nii = "64_Localizer_chunk-2_magnitude_echo-1"
     nii2 = nib.load(os.path.join(path_output, file_name_converted_nii + ".nii.gz"))
     fname_json = os.path.join(path_output, f"{file_name_converted_nii}.json")
     with open(fname_json, 'r') as f:

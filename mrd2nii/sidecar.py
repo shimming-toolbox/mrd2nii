@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 # -*- coding: utf-8 -*
 
+import copy
 import base64
 from datetime import datetime, timedelta, time
 import logging
@@ -181,7 +182,7 @@ def extract_acq_type(metadata):
 
 
 def extract_image_orientation_patient_dicom(image):
-    dir_enc = image.meta['ImageRowDir']
+    dir_enc = copy.deepcopy(image.meta['ImageRowDir'])
     dir_enc.extend(image.meta['ImageColumnDir'])
     dir_enc = [float(x) for x in dir_enc]
     return dir_enc
@@ -606,6 +607,8 @@ def extract_slice_timing(metadata, volume_images):
     """
     Not sure why, but this way of extracting the slice timing is wrong by a factor of 2.5. See
     extract_slice_timing_ice_mini_hdr for the "correct" way to extract the slice timing.
+
+    We currently use the extract_slice_timing_ice_mini_hdr function instead
     """
     # Todo: This is probably in 'ticks', which is 2.5 ms/tick
     logging.warning("Slice timing is different (/2.5) than dcm2niix but seems to be in the right order")
@@ -730,3 +733,51 @@ def extract_phase_encoding_direction(volume_image, vendor_header, dim_info):
 
     # dim_info[1] is the axis of the phase encoding direction
     return f"{mapping[dim_info[1]]}{direction}"
+
+
+def get_n_repetitions(volume_images):
+    nb_repetitions = 0
+    for i in range(len(volume_images)):
+        if nb_repetitions < volume_images[i].getHead().repetition:
+            nb_repetitions = volume_images[i].getHead().repetition
+    nb_repetitions += 1
+    return nb_repetitions
+
+
+def get_n_slices(volume_images, metadata):
+    # Extract nb_slices
+    if extract_n_encoding_directions(metadata) > 1:
+        nb_slices = metadata.encoding[0].encodedSpace.matrixSize.z
+    else:
+        nb_slices = int(metadata.encoding[0].encodingLimits.slice.maximum) + 1
+
+    nb_repetitions = get_n_repetitions(volume_images)
+
+    # Error check
+    if len(volume_images) != nb_slices * nb_repetitions:
+        logging.warning(f"Number of images ({len(volume_images)}) does not match the expected number of images")
+        if len(volume_images) % nb_repetitions != 0:
+            raise RuntimeError("Error while extracting nb_slices from number of images and repetitions")
+
+    return nb_slices
+
+
+def get_is_3d(metadata):
+    return extract_n_encoding_directions(metadata) > 1
+
+
+def extract_n_encoding_directions(metadata):
+    cnt = 0
+    if metadata.encoding[0].encodingLimits.kspace_encoding_step_0 is not None:
+        if not (metadata.encoding[0].encodingLimits.kspace_encoding_step_0.minimum == 0 and
+                metadata.encoding[0].encodingLimits.kspace_encoding_step_0.maximum == 0):
+            cnt += 1
+    if metadata.encoding[0].encodingLimits.kspace_encoding_step_1 is not None:
+        if not (metadata.encoding[0].encodingLimits.kspace_encoding_step_1.minimum == 0 and
+                metadata.encoding[0].encodingLimits.kspace_encoding_step_1.maximum == 0):
+            cnt += 1
+    if metadata.encoding[0].encodingLimits.kspace_encoding_step_2 is not None:
+        if not (metadata.encoding[0].encodingLimits.kspace_encoding_step_2.minimum == 0 and
+                metadata.encoding[0].encodingLimits.kspace_encoding_step_2.maximum == 0):
+            cnt += 1
+    return cnt
