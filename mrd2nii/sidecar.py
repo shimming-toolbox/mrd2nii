@@ -9,6 +9,8 @@ import ismrmrd
 import numpy as np
 import math
 
+logger = logging.getLogger(__name__)
+
 
 def create_bids_sidecar(metadata, volume_images, dim_info=(None, None, None)):
 
@@ -243,7 +245,7 @@ def extract_acq_time(img_meta):
         return ""
 
     if len(acq_time) != 13:
-        logging.warning(f"acq time does not have the expected length in extract_acq_time: {acq_time}")
+        logger.warning(f"acq time does not have the expected length in extract_acq_time: {acq_time}")
 
     acq_time = acq_time[:2] + ":" + acq_time[2:4] + ":" + acq_time[4:]
 
@@ -307,7 +309,7 @@ def extract_non_lin_gradient_corr(img_meta):
 
 def read_vendor_header_img(image):
     meta = ismrmrd.Meta.deserialize(image.attribute_string)
-    # logging.info(meta.keys())
+    # logger.info(meta.keys())
     # ['AcquisitionContrast', 'DistortionCorrection', 'EchoTime', 'FrameOfReference', 'IceImageControl', 'IceMiniHead', 'ImageColumnDir', 'ImageHistory', 'ImageRowDir', 'ImageSliceNormDir', 'ImageType', 'Keep_image_geometry', 'ReadPhaseSeqSwap', 'RepetitionTime', 'SequenceDescription', 'SlicePosLightMarker']
     vendor_header = None
     if 'IceMiniHead' in meta:
@@ -356,7 +358,7 @@ def read_vendor_header_img(image):
                 return output
 
             except Exception:
-                logging.warning(f"Failed to parse ParamArray:{head}")
+                logger.warning(f"Failed to parse ParamArray:{head}")
                 return []
 
         def extract_param_type_and_name(siemens_hdr_name: str):
@@ -475,7 +477,7 @@ def read_vendor_header_img(image):
     # 'ComplexImageComponent': ' "MAGNITUDE" ',
     # 'PixelRepresentation': {},
     # 'SOPInstanceUID': ' "1.3.12.2.1107.5.2.43.167006.2025041517270898436002838" '}
-    # logging.info(head_dict)
+    # logger.info(head_dict)
     return head_dict
 
 
@@ -487,7 +489,7 @@ def read_vendor_header_metadata(metadata):
             vendor_header = param.value
 
     if vendor_header is None:
-        logging.warning("No vendor header")
+        logger.warning("No vendor header")
         return None
 
     header_dict = {}
@@ -500,7 +502,7 @@ def read_vendor_header_metadata(metadata):
         line = line.replace(" ", "").replace("\t", "")
         eq_idx = line.find("=")
 
-        logging.debug(line)
+        logger.debug(line)
         current = header_dict
         for i_tag, tag in enumerate(line[:eq_idx].split(".")):
 
@@ -563,7 +565,7 @@ def extract_slice_timing_ice_mini_hdr(metadata, img_metas, volume_images):
     # Todo: Cross check with TimeAfterStart tag in img_metas
     nb_slices = int(metadata.encoding[0].encodingLimits.slice.maximum) + 1
     if len(volume_images) != nb_slices:
-        logging.warning("Number of slices in metadata does not correspond to number of images, not extracting slice timing")
+        logger.warning("Number of slices in metadata does not correspond to number of images, not extracting slice timing")
         return []
 
     # Trivial case, if only one slice, no slice timing is necessary
@@ -611,7 +613,7 @@ def extract_slice_timing(metadata, volume_images):
     We currently use the extract_slice_timing_ice_mini_hdr function instead
     """
     # Todo: This is probably in 'ticks', which is 2.5 ms/tick
-    logging.warning("Slice timing is different (/2.5) than dcm2niix but seems to be in the right order")
+    logger.warning("Slice timing is different (/2.5) than dcm2niix but seems to be in the right order")
     nb_slices = int(metadata.encoding[0].encodingLimits.slice.maximum) + 1
 
     # Extract ordering
@@ -755,7 +757,7 @@ def get_n_slices(volume_images, metadata):
 
     # Error check
     if len(volume_images) != nb_slices * nb_repetitions:
-        logging.warning(f"Number of images ({len(volume_images)}) does not match the expected number of images")
+        logger.warning(f"Number of images ({len(volume_images)}) does not match the expected number of images")
         if len(volume_images) % nb_repetitions != 0:
             raise RuntimeError("Error while extracting nb_slices from number of images and repetitions")
 

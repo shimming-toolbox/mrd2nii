@@ -3,7 +3,6 @@
 
 import json
 import logging
-import math
 import os
 
 import ismrmrd
@@ -13,6 +12,8 @@ import numpy as np
 import numpy.linalg as npl
 
 from mrd2nii.sidecar import create_bids_sidecar, read_vendor_header_img, get_main_dir
+
+logger = logging.getLogger(__name__)
 
 
 def mrd2nii_dset(dset: ismrmrd.Dataset, output_dir):
@@ -41,7 +42,7 @@ def mrd2nii_dset(dset: ismrmrd.Dataset, output_dir):
             process_waveforms(dset, output_dir)
 
         elif group == 'data':
-            logging.warning("Raw data is not supported yet")
+            logger.warning("Raw data is not supported yet")
             # for i_acq in range(0, dset.number_of_acquisitions()):
             #     pass
             # acq = dset.read_acquisition(i_acq)
@@ -76,7 +77,7 @@ def mrd2nii_dset(dset: ismrmrd.Dataset, output_dir):
 
     # Convert to NIfTI
     for acq_name, volume_images in files_output.items():
-        logging.info(f"Converting {acq_name} to NIfTI")
+        logger.info(f"Converting {acq_name} to NIfTI")
 
         # Convert to NIfTI
         nii, sidecar = mrd2nii_volume(metadata, volume_images)
@@ -84,7 +85,7 @@ def mrd2nii_dset(dset: ismrmrd.Dataset, output_dir):
         # Save NIfTI file
         fname_nii = os.path.join(output_dir, f"{acq_name}.nii.gz")
         nib.save(nii, fname_nii)
-        logging.info(f"Saved NIfTI file to {fname_nii}")
+        logger.info(f"Saved NIfTI file to {fname_nii}")
 
         # Save JSON
         fname_json = os.path.join(output_dir, f"{acq_name}.json")
@@ -142,7 +143,7 @@ def process_waveforms(dset, path_output):
         waveform = dset.read_waveform(i_waveform)
         wav_header = waveform.getHead()
         if wav_header.waveform_id not in data_wav:
-            logging.debug(f"Waveform ID {wav_header.waveform_id} not recognized, skipping")
+            logger.debug(f"Waveform ID {wav_header.waveform_id} not recognized, skipping")
             continue
 
         if wav_header.number_of_samples == 0:
@@ -210,7 +211,7 @@ def save_waveform_log_file(logfile_id, trace_ids, trace_names, data_wav, fname_o
 
 
 def mrd2nii_volume(metadata, volume_images, skip_sidecar=False):
-    logging.debug(volume_images[0].getHead())
+    logger.debug(volume_images[0].getHead())
 
     # Make sure all slices have the same rotation matrix
     rotm = None
@@ -261,7 +262,7 @@ def mrd2nii_volume(metadata, volume_images, skip_sidecar=False):
 
 def mrd2nii_stack(metadata, image, include_slice_gap=True):
     header = image.getHead()
-    logging.debug(header)
+    logger.debug(header)
 
     # Extract ordering
     nb_slices = header.matrix_size[-1]
@@ -318,12 +319,12 @@ def mrd2nii_stack(metadata, image, include_slice_gap=True):
     else:
         raise RuntimeError("Slice direction not recognized")
 
-    logging.debug(f"matrix size: {matrix}")
-    logging.debug(f"mid_voxel_coord: {list(mid_voxel_coord)}")
+    logger.debug(f"matrix size: {matrix}")
+    logger.debug(f"mid_voxel_coord: {list(mid_voxel_coord)}")
 
     mid_voxel_index -= np.array([0, matrix[1], matrix[2]])
     translation = mid_voxel_coord - (affine[:3, :3] @ mid_voxel_index)
-    logging.debug(f"translation: {list(translation)}")
+    logger.debug(f"translation: {list(translation)}")
 
     affine[:3, 3] = translation
     affine[3, 3] = 1
@@ -332,16 +333,16 @@ def mrd2nii_stack(metadata, image, include_slice_gap=True):
     affine[:2, :] *= -1
     affine[:, 1:3] *= -1
 
-    logging.debug(f"pix_dim: {pix_dim}")
-    logging.debug(f"rotm: {rotm}")
-    logging.debug(f"matrix size: {matrix}")
-    logging.debug(f"FOV: {fov}")
-    logging.debug(f"affine: {affine}")
+    logger.debug(f"pix_dim: {pix_dim}")
+    logger.debug(f"rotm: {rotm}")
+    logger.debug(f"matrix size: {matrix}")
+    logger.debug(f"FOV: {fov}")
+    logger.debug(f"affine: {affine}")
 
     # Reconstruct images
     data = np.zeros((matrix[0], matrix[1], matrix[2]))
 
-    # logging.debug(f"shape: {volume.data.shape}")
+    # logger.debug(f"shape: {volume.data.shape}")
     if get_main_dir(image.meta['ImageSliceNormDir']) == 2:
         datatmp = np.flip(image.data[0, 0, :, :], 0)
         datatmp = np.transpose(datatmp, (1, 0))
@@ -461,7 +462,7 @@ def merge_stacks_into_volume(nii1, nii2):
             if master_n_slices < n_slices:
                 master_n_slices = round(n_slices)
 
-    logging.debug(f"master_n_slices: {master_n_slices}")
+    logger.debug(f"master_n_slices: {master_n_slices}")
 
     # Find which affine is the master affine
     # ie the one that when used with the other nii does not return negative indices
