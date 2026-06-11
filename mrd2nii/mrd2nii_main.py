@@ -12,8 +12,7 @@ from nibabel.affines import apply_affine
 import numpy as np
 import numpy.linalg as npl
 
-from mrd2nii.sidecar import (create_bids_sidecar, read_vendor_header_img, extract_prot_sli_number_to_mrd_index,
-                             extract_mrd_index_to_prot_sli_number, get_main_dir)
+from mrd2nii.sidecar import create_bids_sidecar, read_vendor_header_img, get_main_dir
 
 
 def mrd2nii_dset(dset: ismrmrd.Dataset, output_dir):
@@ -329,7 +328,7 @@ def mrd2nii_stack(metadata, image, include_slice_gap=True):
     affine[:3, 3] = translation
     affine[3, 3] = 1
 
-    # Not entirely sure what is going on, it works experimentally
+    # Change orientation (LPS to RAS)
     affine[:2, :] *= -1
     affine[:, 1:3] *= -1
 
@@ -404,7 +403,7 @@ def mrd2nii_stack(metadata, image, include_slice_gap=True):
 
 
 def extract_rot_matrix(volume_image):
-    # Todo: If volume_image.meta['ImageRowDir']) has 2 values that are maximum (exactly 45 deg rotated I believe), this could fail
+    # Todo: If volume_image.meta['ImageRowDir']) has 2 values that are maximum (ie: exactly 45 deg rotated I believe), this could fail
     rotm = np.zeros((3, 3))
     rotm[:, get_main_dir(volume_image.meta['ImageRowDir'])] = [volume_image.meta['ImageRowDir'][0],
                                                                volume_image.meta['ImageRowDir'][1],
@@ -416,73 +415,6 @@ def extract_rot_matrix(volume_image):
                                                                      volume_image.meta['ImageSliceNormDir'][1],
                                                                      volume_image.meta['ImageSliceNormDir'][2]]
     return rotm
-
-
-def extract_n_encoding_directions(metadata):
-    cnt = 0
-    if metadata.encoding[0].encodingLimits.kspace_encoding_step_0 is not None:
-        if not (metadata.encoding[0].encodingLimits.kspace_encoding_step_0.minimum == 0 and
-                metadata.encoding[0].encodingLimits.kspace_encoding_step_0.maximum == 0):
-            cnt += 1
-    if metadata.encoding[0].encodingLimits.kspace_encoding_step_1 is not None:
-        if not (metadata.encoding[0].encodingLimits.kspace_encoding_step_1.minimum == 0 and
-                metadata.encoding[0].encodingLimits.kspace_encoding_step_1.maximum == 0):
-            cnt += 1
-    if metadata.encoding[0].encodingLimits.kspace_encoding_step_2 is not None:
-        if not (metadata.encoding[0].encodingLimits.kspace_encoding_step_2.minimum == 0 and
-                metadata.encoding[0].encodingLimits.kspace_encoding_step_2.maximum == 0):
-            cnt += 1
-    return cnt
-
-
-def compress_mapping(mapping, compress_keys=True, compress_values=True):
-    """Compress mapping to remove gaps in the order indices."""
-    # e.g.: {0: 6, 4: 5, 5: 7} -> {0: 1, 1: 0, 2: 2}
-    if compress_keys:
-        tmp_mapping = {}
-        for new_idx, old_idx in enumerate(sorted(mapping.keys())):
-            tmp_mapping[new_idx] = mapping[old_idx]
-    else:
-        tmp_mapping = mapping
-
-    if compress_values:
-        compressed_mapping = {}
-        sorted_values = sorted(tmp_mapping.values())
-        for key, value in tmp_mapping.items():
-            compressed_mapping[key] = sorted_values.index(value)
-    else:
-        compressed_mapping = tmp_mapping
-
-    return compressed_mapping
-
-
-def get_n_repetitions(volume_images):
-    nb_repetitions = 0
-    for i in range(len(volume_images)):
-        if nb_repetitions < volume_images[i].getHead().repetition:
-            nb_repetitions = volume_images[i].getHead().repetition
-    nb_repetitions += 1
-    return nb_repetitions
-
-def get_n_slices(volume_images, metadata):
-    # Extract nb_slices
-    if extract_n_encoding_directions(metadata) > 1:
-        nb_slices = metadata.encoding[0].encodedSpace.matrixSize.z
-    else:
-        nb_slices = int(metadata.encoding[0].encodingLimits.slice.maximum) + 1
-
-    nb_repetitions = get_n_repetitions(volume_images)
-
-    # Error check
-    if len(volume_images) != nb_slices * nb_repetitions:
-        logging.warning(f"Number of images ({len(volume_images)}) does not match the expected number of images")
-        if len(volume_images) % nb_repetitions != 0:
-            raise RuntimeError("Error while extracting nb_slices from number of images and repetitions")
-
-    return nb_slices
-
-def get_is_3d(metadata):
-    return extract_n_encoding_directions(metadata) > 1
 
 
 def merge_stacks_into_volume(nii1, nii2):
