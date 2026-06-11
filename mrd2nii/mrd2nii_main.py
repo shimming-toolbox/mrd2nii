@@ -8,7 +8,9 @@ import os
 
 import ismrmrd
 import nibabel as nib
+from nibabel.affines import apply_affine
 import numpy as np
+import numpy.linalg as npl
 
 from mrd2nii.sidecar import (create_bids_sidecar, read_vendor_header_img, extract_prot_sli_number_to_mrd_index,
                              extract_mrd_index_to_prot_sli_number, get_main_dir)
@@ -47,16 +49,15 @@ def mrd2nii_dset(dset: ismrmrd.Dataset, output_dir):
             # acq.data
 
         elif group.startswith('image_') or group.startswith('images_'):
-            stacks = extract_in_stacks(dset, group)
-            for i_stack, stack in enumerate(stacks):
-                for i_img in range(len(stack)):
-                    image = stack[i_img]
+            chunks = extract_in_chunks(dset, group)
+            for i_chunk, chunk in enumerate(chunks):
+                for i_img in range(len(chunk)):
+                    image = chunk[i_img]
                     acq_name = f"{image.getHead().measurement_uid}"
                     # Can't use: read_vendor_header_img(image)['AcquisitionNumber']
-                    # Numbering seems wrong
                     acq_name += f"_{metadata.measurementInformation.protocolName}"
-                    if len(stacks) > 1:
-                        acq_name += f"_stack-{i_stack + 1}"
+                    if len(chunks) > 1:
+                        acq_name += f"_chunk-{i_chunk + 1}"
                     if image.getHead().image_type == ismrmrd.IMTYPE_MAGNITUDE:
                         acq_name += "_magnitude"
                     elif image.getHead().image_type == ismrmrd.IMTYPE_PHASE:
@@ -92,29 +93,30 @@ def mrd2nii_dset(dset: ismrmrd.Dataset, output_dir):
             json.dump(sidecar, f, ensure_ascii=False, indent=4)
 
 
-def extract_in_stacks(dset, group):
-    """Extract images in stacks based on their rotation matrix.
-    A stack is defined as a set of image that creates a volume when combined together.
+def extract_in_chunks(dset, group):
+    """Extract images in chunks.
+    A chunk is defined as a set of image that creates a volume when combined together.
     """
-    stacks = []
+    chunks = []
     rotms = []
     for i_img in range(0, dset.number_of_images(group)):
         image = dset.read_image(group, i_img)
         rotm = extract_rot_matrix(image)
-        # Check if we have a stack with the same rotation matrix
-        # Todo: This is not bullet proof, if stacks have the same rotation matrix but different locations
-        #  then this will fail to extract the stacks correctly.
+        # Check if we have a chunk with the same rotation matrix
+        # Todo: This is not bullet proof, if chunks have the same rotation matrix but different locations
+        #  then this will fail to extract the chunks correctly.
+        #  I have not found a reliable chunk parameter
         found = False
-        for i_stack in range(len(rotms)):
-            if np.allclose(rotm, rotms[i_stack]):
-                stacks[i_stack].append(image)
+        for i_chunk in range(len(rotms)):
+            if np.allclose(rotm, rotms[i_chunk]):
+                chunks[i_chunk].append(image)
                 found = True
                 break
-        # If we didn't find a matching stack, create a new one
+        # If we didn't find a matching chunk, create a new one
         if not found:
             rotms.append(rotm)
-            stacks.append([image])
-    return stacks
+            chunks.append([image])
+    return chunks
 
 
 def process_waveforms(dset, path_output):
@@ -209,33 +211,9 @@ def save_waveform_log_file(logfile_id, trace_ids, trace_names, data_wav, fname_o
 
 
 def mrd2nii_volume(metadata, volume_images, skip_sidecar=False):
-    logging.info(volume_images[0].getHead())
+    logging.debug(volume_images[0].getHead())
 
-    a_volume_image = []
-    nb_repetitions = 0
-    for i in range(len(volume_images)):
-        if nb_repetitions < volume_images[i].getHead().repetition:
-            nb_repetitions = volume_images[i].getHead().repetition
-        if volume_images[i].getHead().repetition == 0:
-            a_volume_image.append(volume_images[i])
-    nb_repetitions += 1
-
-    # Extract ordering
-    if extract_n_encoding_directions(metadata) > 1:
-        nb_slices = metadata.encoding[0].encodedSpace.matrixSize.z
-        if nb_slices != len(volume_images) / nb_repetitions:
-            raise RuntimeError("Error while extracting nb_slices for 3D acquisition")
-    else:
-        nb_slices = int(metadata.encoding[0].encodingLimits.slice.maximum) + 1
-
-    if len(volume_images) != nb_slices * nb_repetitions or len(volume_images) != nb_repetitions:
-        logging.warning(f"Number of images ({len(volume_images)}) does not match the expected number of images")
-        nb_slices = len(volume_images) // nb_repetitions
-
-        if len(volume_images) % nb_repetitions != 0:
-            raise RuntimeError("Error while extracting nb_slices from number of images and repetitions")
-
-    # Make sure all slices have the same encoding matrix
+    # Make sure all slices have the same rotation matrix
     rotm = None
     for i, volume_image in enumerate(volume_images):
         tmp = extract_rot_matrix(volume_image)
@@ -243,227 +221,38 @@ def mrd2nii_volume(metadata, volume_images, skip_sidecar=False):
             rotm = tmp
         else:
             if not np.allclose(tmp, rotm):
-                raise NotImplementedError("Acquisition with multiple stacks are not supported yet.")
+                raise NotImplementedError("Slices have different rotations.")
 
-    if metadata.encoding[0].reconSpace.matrixSize.z != 1:
-        is_3d = True
-        order_idx_to_mrd_idx = {i: i for i in range(nb_slices)}
-        mrd_idx_to_order_idx = {i: i for i in range(nb_slices)}
-    else:
-        is_3d = False
-        order_idx_to_mrd_idx = extract_prot_sli_number_to_mrd_index(volume_images)
-        mrd_idx_to_order_idx = extract_mrd_index_to_prot_sli_number(volume_images)
+    # Sort the images in a dictionary with repetition number as key
+    images_by_rep_number = {}
+    for i, volume_image in enumerate(volume_images):
+        rep = volume_image.getHead().repetition
+        if rep not in images_by_rep_number:
+            images_by_rep_number[rep] = []
+        images_by_rep_number[rep].append(volume_image)
 
-    logging.info(f"mrd_idx_to_order_idx: {mrd_idx_to_order_idx}")
-    logging.info(f"order_idx_to_mrd_idx: {order_idx_to_mrd_idx}")
+    if max(images_by_rep_number.keys()) != len(images_by_rep_number) - 1:
+        raise ValueError("Repetition numbers should be consecutive and start from 0.")
 
-    # Find image on one edge of the FOV
-    # Looks like the most inferior slice
-    sli_idx = order_idx_to_mrd_idx[min(order_idx_to_mrd_idx.keys())]
-    # sli_idx = order_idx_to_mrd_idx[0]
-    idxbeg_in_volume_images = -1
-    for i, image in enumerate(volume_images):
-        header = image.getHead()
-        if header.slice == sli_idx:
-            idxbeg_in_volume_images = i
-            break
-
-    # Find image on the other edge of the FOV
-    # Looks like the most superior slice
-    sli_idx = order_idx_to_mrd_idx[max(order_idx_to_mrd_idx.keys())]
-    # sli_idx = order_idx_to_mrd_idx[nb_slices - 1]
-    idxend_in_volume_images = -1
-    for i, image in enumerate(volume_images):
-        header = image.getHead()
-        if header.slice == sli_idx:
-            idxend_in_volume_images = i
-            break
-
-    if idxend_in_volume_images < 0 or idxbeg_in_volume_images < 0:
-        raise RuntimeError("Can't find start or end idx in provided images")
-
-    # mrd_to_nifti_idx
-    mrd_idx_to_order_idx_cmp = compress_mapping(mrd_idx_to_order_idx, compress_keys=False, compress_values=True)
-    # order_idx_to_mrd_idx = compress_mapping(mrd_idx_to_order_idx, compress_keys=False, compress_values=True)
-
-    mrd_dims_to_nii_dims = np.argsort([get_main_dir(volume_images[0].getHead().read_dir[:]),
-                                       get_main_dir(volume_images[0].getHead().phase_dir[:]),
-                                       get_main_dir(volume_images[0].getHead().slice_dir[:])])
-    nii_dims_to_mrd_dims = np.argsort(mrd_dims_to_nii_dims)
-
-    matrix = [metadata.encoding[0].reconSpace.matrixSize.x,
-              metadata.encoding[0].reconSpace.matrixSize.y,
-              nb_slices]
-    matrix = list(np.array(matrix)[mrd_dims_to_nii_dims])
-
-    fov = [metadata.encoding[0].reconSpace.fieldOfView_mm.x,
-           metadata.encoding[0].reconSpace.fieldOfView_mm.y,
-           metadata.encoding[0].reconSpace.fieldOfView_mm.z]
-    fov = list(np.array(fov)[mrd_dims_to_nii_dims])
-
-    # fov in z is only the FOV for the item. In this case, that's only one slice
-    # We take the middle of the slice positioning to calculate the FOV in the slice direction
-    # Since "position" is the middle of the pixel, we need to add an additional slice to account for the missing half on both sides
-    if is_3d or nb_slices == 1:
-        pix_dim = [
-            fov[0] / matrix[0],
-            fov[1] / matrix[1],
-            fov[2] / matrix[2]]
-    else:
-        fovz_missing_edges = math.sqrt(((volume_images[idxend_in_volume_images].getHead().position[0] -
-                                         volume_images[idxbeg_in_volume_images].getHead().position[0]) ** 2) +
-                                       ((volume_images[idxend_in_volume_images].getHead().position[1] -
-                                         volume_images[idxbeg_in_volume_images].getHead().position[1]) ** 2) +
-                                       ((volume_images[idxend_in_volume_images].getHead().position[2] -
-                                         volume_images[idxbeg_in_volume_images].getHead().position[2]) ** 2))
-        logging.info(f"fovz_missing_edges: {fovz_missing_edges}")
-        pix_dim = [
-            fov[0] / matrix[0],
-            fov[1] / matrix[1],
-            fov[2] / matrix[2]]
-        # The fovz_missing_edges is still in mrd coordinates
-        pix_dim[nii_dims_to_mrd_dims[2]] = fovz_missing_edges / (matrix[nii_dims_to_mrd_dims[2]] - 1)
-
-        # Add the missing pixel now that we know the pixdim (including slice gap)
-        fov[nii_dims_to_mrd_dims[2]] = fovz_missing_edges + pix_dim[nii_dims_to_mrd_dims[2]]
-
-    affine = np.zeros((4, 4))
-    affine[:3, 0] = pix_dim[0] * rotm[:, 0]
-    affine[:3, 1] = pix_dim[1] * rotm[:, 1]
-    affine[:3, 2] = pix_dim[2] * rotm[:, 2]
-
-    # 'SlicePosLightMarker' seems to be more accurate
-    if volume_images[0].meta.get('SlicePosLightMarker') is not None:
-        im_beg_pos = [float(i) for i in volume_images[idxbeg_in_volume_images].meta.get('SlicePosLightMarker')]
-        im_end_pos = [float(i) for i in volume_images[idxend_in_volume_images].meta.get('SlicePosLightMarker')]
-    else:
-        im_beg_pos = volume_images[idxbeg_in_volume_images].getHead().position
-        im_end_pos = volume_images[idxend_in_volume_images].getHead().position
-
-    mid_voxel_coord = [
-        (im_beg_pos[0] + im_end_pos[0]) / 2,
-        (im_beg_pos[1] + im_end_pos[1]) / 2,
-        (im_beg_pos[2] + im_end_pos[2]) / 2
-    ]
-
-    mid_voxel_index = np.array(matrix) / 2
-    # Some adjustment through experimental testing (maybe due to where the (0,0,0) is defined?)
-    # I would have expected needing (-0.5, -0.5, -0.5) everywhere (middle of the corner voxel)
-    if get_main_dir(volume_images[0].meta['ImageSliceNormDir']) == 2:
-        mid_voxel_index += np.array((0, 1, 0.5))
-    elif get_main_dir(volume_images[0].meta['ImageSliceNormDir']) == 1:
-        mid_voxel_index += np.array((0, 0.5, 1))
-    elif get_main_dir(volume_images[0].meta['ImageSliceNormDir']) == 0:
-        mid_voxel_index += np.array((-0.5, 1, 1))
-    else:
-        raise RuntimeError("Slice direction not recognized")
-
-    logging.debug(f"matrix size: {matrix}")
-    logging.debug(f"mid_voxel_coord: {list(mid_voxel_coord)}")
-    # (matrix / 2) @ rotm + translation = mid_voxel_coord
-
-    mid_voxel_index -= np.array([0, matrix[1], matrix[2]])
-    translation = mid_voxel_coord - (affine[:3, :3] @ mid_voxel_index)
-    logging.debug(f"translation: {list(translation)}")
-
-    affine[:3, 3] = translation
-    affine[3, 3] = 1
-
-    # Not entirely sure what is going on, it works experimentally
-    affine[:2, :] *= -1
-    affine[:, 1:3] *= -1
-
-    logging.debug(f"Translation idxbeg: {[i for i in volume_images[idxbeg_in_volume_images].getHead().position]}")
-    logging.debug(f"Translation idxend: {[i for i in volume_images[idxend_in_volume_images].getHead().position]}")
-
-    logging.debug(f"pix_dim: {pix_dim}")
-    logging.debug(f"rotm: {rotm}")
-    logging.debug(f"matrix size: {matrix}")
-    logging.debug(f"FOV: {fov}")
-    logging.debug(f"affine: {affine}")
-
-    # Reconstruct images
-    img_metas = []
-    for image in volume_images:
-        img_metas.append(read_vendor_header_img(image))
-
-    data = np.zeros((matrix[0], matrix[1], matrix[2], nb_repetitions))
-    for i_vol, volume in enumerate(volume_images):
-        slice = volume.getHead().slice
-        repetition = volume.getHead().repetition
-        logging.debug(f"repetition: {repetition}")
-
-        if not is_3d and img_metas[i_vol]["ProtocolSliceNumber"] != mrd_idx_to_order_idx[slice]:
-            raise RuntimeError("ProtocolSliceNumber does not match slice number")
-
-        if img_metas[i_vol]["AcquisitionNumber"] - 1 != repetition:
-            raise RuntimeError("Repetition # does not match repetition number")
-
-        if get_main_dir(volume.meta['ImageSliceNormDir']) == 2:
-            datatmp = np.flip(volume.data[0, 0, :, :], 0)
-            datatmp = np.transpose(datatmp, (1, 0))
-            data[:, :, mrd_idx_to_order_idx_cmp[slice], repetition] = datatmp
-        elif get_main_dir(volume.meta['ImageSliceNormDir']) == 1:
-            datatmp = np.flip(volume.data[0, 0, :, :], 0)
-            datatmp = np.transpose(datatmp, (1, 0))
-            data[:, mrd_idx_to_order_idx_cmp[slice], :, repetition] = datatmp
-        elif get_main_dir(volume.meta['ImageSliceNormDir']) == 0:
-            datatmp = np.flip(volume.data[0, 0, :, :], 1)
-            datatmp = np.flip(datatmp, 0)
-            datatmp = np.transpose(datatmp, (1, 0))
-            data[mrd_idx_to_order_idx_cmp[slice], :, :, repetition] = datatmp
-        else:
-            raise RuntimeError("Slice direction not recognized")
-
-    if data.shape[-1] == 1:
-        data = np.squeeze(data, axis=-1)
-
-    nii_tmp = nib.Nifti1Image(data, affine=affine)
-    nii_tmp.header.set_dim_info(*mrd_dims_to_nii_dims)
-    if len(nii_tmp.shape) > 3:
-        nii_tmp.header.set_xyzt_units("mm", "sec")
-    else:
-        nii_tmp.header.set_xyzt_units("mm")
-
-    nii_tmp.header.set_qform(affine, code=1)
-    nii_tmp.header.set_sform(affine, code=1)
-
-    ornt_in = nib.orientations.axcodes2ornt(nib.orientations.aff2axcodes(nii_tmp.affine))
-    if get_main_dir(volume.meta['ImageSliceNormDir']) == 2:
-        ornt_out = nib.orientations.axcodes2ornt(('L', 'A', 'S'))
-        ornt = nib.orientations.ornt_transform(ornt_in, ornt_out)
-        nii = nii_tmp.as_reoriented(ornt)
-        # Looks like there is a bug in nibabel and dim info is not set correctly, we patch it here
-        new_dim_info = [None, None, None]
-        for i in range(3):
-            new_dim_info[int(ornt[i, 0])] = nii_tmp.header.get_dim_info()[i]
-        nii.header.set_dim_info(*new_dim_info)
-    elif get_main_dir(volume.meta['ImageSliceNormDir']) == 1:
-        ornt_out = nib.orientations.axcodes2ornt(('L', 'S', 'P'))
-        ornt = nib.orientations.ornt_transform(ornt_in, ornt_out)
-        nii = nii_tmp.as_reoriented(ornt)
-        # Looks like there is a bug in nibabel and dim info is not set correctly, we patch it here
-        new_dim_info = [None, None, None]
-        for i in range(3):
-            new_dim_info[int(ornt[i, 0])] = nii_tmp.header.get_dim_info()[i]
-        nii.header.set_dim_info(*new_dim_info)
-    elif get_main_dir(volume.meta['ImageSliceNormDir']) == 0:
-        ornt_out = nib.orientations.axcodes2ornt(('P', 'S', 'R'))
-        ornt = nib.orientations.ornt_transform(ornt_in, ornt_out)
-        nii = nii_tmp.as_reoriented(ornt)
-        # Looks like there is a bug in nibabel and dim info is not set correctly, we patch it here
-        new_dim_info = [None, None, None]
-        for i in range(3):
-            new_dim_info[int(ornt[i, 0])] = nii_tmp.header.get_dim_info()[i]
-        nii.header.set_dim_info(*new_dim_info)
-    else:
-        raise RuntimeError("Slice direction not recognized")
+    nii = None
+    for rep in sorted(images_by_rep_number.keys()):
+        nii_volume = None
+        for i, volume_image in enumerate(images_by_rep_number[rep]):
+            nii_stack = mrd2nii_stack(metadata, volume_image, include_slice_gap=True)
+            nii_volume = merge_stacks_into_volume(nii_volume, nii_stack)
+        nii = merge_repetitions(nii, nii_volume)
 
     if not skip_sidecar:
-        sidecar = create_bids_sidecar(metadata, a_volume_image, new_dim_info)
+        # Grab all images for a single volume (repetition 0)
+        a_volume_image = []
+        for i in range(len(volume_images)):
+            if volume_images[i].getHead().repetition == 0:
+                a_volume_image.append(volume_images[i])
+
+        sidecar = create_bids_sidecar(metadata, a_volume_image, nii.header.get_dim_info())
         if sidecar.get('SliceTiming') is not None:
             # Reorder slice timing if we needed to flip it when creating the Nifti
-            if get_main_dir(volume.meta['ImageSliceNormDir']) == 0:
+            if get_main_dir(a_volume_image[0].meta['ImageSliceNormDir']) == 0:
                 sidecar['SliceTiming'] = sidecar['SliceTiming'][::-1]
     else:
         sidecar = None
@@ -510,11 +299,9 @@ def mrd2nii_stack(metadata, image, include_slice_gap=True):
     rotm = extract_rot_matrix(image)
 
     affine = np.zeros((4, 4))
-    affine[:3, 0] = pix_dim[0] * rotm[:, 0]
-    affine[:3, 1] = pix_dim[1] * rotm[:, 1]
-    affine[:3, 2] = pix_dim[2] * rotm[:, 2]
+    affine[:3, :3] = pix_dim * rotm
 
-    # 'SlicePosLightMarker' seems to be more accurate
+    # 'SlicePosLightMarker' seems to be more accurate than image.position
     if image.meta.get('SlicePosLightMarker') is not None:
         mid_voxel_coord = [float(i) for i in image.meta.get('SlicePosLightMarker')]
     else:
@@ -572,9 +359,6 @@ def mrd2nii_stack(metadata, image, include_slice_gap=True):
     else:
         raise RuntimeError("Slice direction not recognized")
 
-    if data.shape[-1] == 1:
-        data = np.squeeze(data, axis=-1)
-
     nii_tmp = nib.Nifti1Image(data, affine=affine)
     nii_tmp.header.set_dim_info(*mrd_dims_to_nii_dims)
     if len(nii_tmp.shape) > 3:
@@ -620,6 +404,7 @@ def mrd2nii_stack(metadata, image, include_slice_gap=True):
 
 
 def extract_rot_matrix(volume_image):
+    # Todo: If volume_image.meta['ImageRowDir']) has 2 values that are maximum (exactly 45 deg rotated I believe), this could fail
     rotm = np.zeros((3, 3))
     rotm[:, get_main_dir(volume_image.meta['ImageRowDir'])] = [volume_image.meta['ImageRowDir'][0],
                                                                volume_image.meta['ImageRowDir'][1],
@@ -671,22 +456,132 @@ def compress_mapping(mapping, compress_keys=True, compress_values=True):
     return compressed_mapping
 
 
-def compress_mapping(mapping, compress_keys=True, compress_values=True):
-    """Compress mapping to remove gaps in the order indices."""
-    # e.g.: {0: 6, 4: 5, 5: 7} -> {0: 1, 1: 0, 2: 2}
-    if compress_keys:
-        tmp_mapping = {}
-        for new_idx, old_idx in enumerate(sorted(mapping.keys())):
-            tmp_mapping[new_idx] = mapping[old_idx]
-    else:
-        tmp_mapping = mapping
+def get_n_repetitions(volume_images):
+    nb_repetitions = 0
+    for i in range(len(volume_images)):
+        if nb_repetitions < volume_images[i].getHead().repetition:
+            nb_repetitions = volume_images[i].getHead().repetition
+    nb_repetitions += 1
+    return nb_repetitions
 
-    if compress_values:
-        compressed_mapping = {}
-        sorted_values = sorted(tmp_mapping.values())
-        for key, value in tmp_mapping.items():
-            compressed_mapping[key] = sorted_values.index(value)
+def get_n_slices(volume_images, metadata):
+    # Extract nb_slices
+    if extract_n_encoding_directions(metadata) > 1:
+        nb_slices = metadata.encoding[0].encodedSpace.matrixSize.z
     else:
-        compressed_mapping = tmp_mapping
+        nb_slices = int(metadata.encoding[0].encodingLimits.slice.maximum) + 1
 
-    return compressed_mapping
+    nb_repetitions = get_n_repetitions(volume_images)
+
+    # Error check
+    if len(volume_images) != nb_slices * nb_repetitions:
+        logging.warning(f"Number of images ({len(volume_images)}) does not match the expected number of images")
+        if len(volume_images) % nb_repetitions != 0:
+            raise RuntimeError("Error while extracting nb_slices from number of images and repetitions")
+
+    return nb_slices
+
+def get_is_3d(metadata):
+    return extract_n_encoding_directions(metadata) > 1
+
+
+def merge_stacks_into_volume(nii1, nii2):
+    # if slices are overlapping, overwrite the slices from nii1 by nii2
+    if nii1 is None:
+        return nii2
+
+    if nii1.header.get_dim_info() != nii2.header.get_dim_info():
+        raise RuntimeError("Can't merge stacks with different dim info")
+
+    if nii1.shape[:2] != nii2.shape[:2]:
+        raise RuntimeError("Can't merge stacks with different shapes")
+
+    # If inputs are 2D arrays, convert them to 3D. The zoom needs to be set correctly because it was 1 since it was 2D
+    if nii1.ndim == 2:
+        nii1 = nib.Nifti1Image(nii1.get_fdata()[..., np.newaxis], affine=nii1.affine, header=nii1.header)
+        nii1.header.set_zooms(npl.norm(nii1.affine[:3, :3], axis=0))
+    if nii2.ndim == 2:
+        nii2 = nib.Nifti1Image(nii2.get_fdata()[..., np.newaxis], affine=nii2.affine, header=nii2.header)
+        nii2.header.set_zooms(npl.norm(nii2.affine[:3, :3], axis=0))
+
+    if not np.allclose(nii1.header.get_zooms(), nii2.header.get_zooms()):
+        raise RuntimeError("Can't merge stacks with different pixel dimensions")
+
+    pix_dim = nii1.header.get_zooms()
+    # Find location of [0,0,:] (ie first voxel of each slice)
+    slice_loc1 = []
+    for i in range(nii1.shape[2]):
+        slice_loc1.append(apply_affine(nii1.affine, [0, 0, i]))  # Location of the first voxel of the slice
+    slice_loc2 = []
+    for i in range(nii2.shape[2]):
+        slice_loc2.append(apply_affine(nii2.affine, [0, 0, i]))  # Location of the first voxel of the slice
+    all_slice_loc = slice_loc1 + slice_loc2
+
+    master_n_slices = -1
+    for i in range(len(all_slice_loc)):
+        for j in range(len(all_slice_loc)):
+            # Find the distance between the two slice locations then divide by slice dimension
+            # We add 1 since we want the number of slices
+            n_slices = np.sqrt((all_slice_loc[i][0] - all_slice_loc[j][0]) ** 2 +
+                               (all_slice_loc[i][1] - all_slice_loc[j][1]) ** 2 +
+                               (all_slice_loc[i][2] - all_slice_loc[j][2]) ** 2) / pix_dim[2] + 1
+
+            if master_n_slices < n_slices:
+                master_n_slices = round(n_slices)
+
+    logging.debug(f"master_n_slices: {master_n_slices}")
+
+    # Find which affine is the master affine
+    # ie the one that when used with the other nii does not return negative indices
+    # OR both affines are the same...
+    inv_aff2 = npl.inv(nii2.affine)
+    k_indx_1 = []
+    for i in range(nii1.shape[2]):
+        k_indx_1.append(round(apply_affine(inv_aff2, slice_loc1[i])[2]))
+    inv_aff1 = npl.inv(nii1.affine)
+    k_indx_2 = []
+    for i in range(nii2.shape[2]):
+        k_indx_2.append(round(apply_affine(inv_aff1, slice_loc2[i])[2]))
+
+    master_affine = None
+    if np.any(np.array(k_indx_1) < 0):
+        master_affine = nii1.affine
+        k_indx_1 = list(range(nii1.shape[2]))
+    if np.any(np.array(k_indx_2) < 0):
+        master_affine = nii2.affine
+        k_indx_2 = list(range(nii2.shape[2]))
+    if np.allclose(nii1.affine, nii2.affine):
+        master_affine = nii1.affine
+    if master_affine is None:
+        raise RuntimeError("Can't find master affine")
+    if not np.all(np.array(k_indx_1) >= 0) and not np.all(np.array(k_indx_2) >= 0):
+        raise RuntimeError("Both affines return negative indices, can't find master affine")
+
+    # Initialize a master array with an array encompassing both stacks (ie with enough slices to fit both stacks)
+    master_shape = (nii1.shape[0], nii1.shape[1], master_n_slices)
+    master_data = np.full(master_shape, np.nan)  # Using NaN helps track empty gaps
+
+    # Fill the master array
+    for i in range(nii1.shape[2]):
+        master_data[..., k_indx_1[i]] = nii1.dataobj[:, :, i]
+    for i in range(nii2.shape[2]):
+        master_data[..., k_indx_2[i]] = nii2.dataobj[:, :, i]
+
+    master_data = np.nan_to_num(master_data, nan=0.0)
+    nii_merged = nib.Nifti1Image(master_data, affine=master_affine, header=nii1.header)
+
+    return nii_merged
+
+
+def merge_repetitions(nii, nii_volume):
+    if nii is None:
+        return nii_volume
+
+    if nii.ndim == 3:
+        data_nii = nii.get_fdata()[..., np.newaxis]
+    else:
+        data_nii = nii.get_fdata()
+    data = np.concatenate((data_nii, nii_volume.get_fdata()[..., np.newaxis]), axis=3)
+    nii_merged = nib.Nifti1Image(data, nii.affine, header=nii.header)
+
+    return nii_merged
