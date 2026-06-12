@@ -10,6 +10,7 @@ import nibabel as nib
 from nibabel.affines import apply_affine
 import numpy as np
 import numpy.linalg as npl
+from tqdm import tqdm
 
 from mrd2nii.sidecar import create_bids_sidecar, read_vendor_header_img, get_main_dir
 
@@ -100,6 +101,7 @@ def extract_in_chunks(dset, group):
     chunks = []
     rotms = []
     for i_img in range(0, dset.number_of_images(group)):
+        # Todo: Better way to do this? This is quite slow
         image = dset.read_image(group, i_img)
         rotm = extract_rot_matrix(image)
         # Check if we have a chunk with the same rotation matrix
@@ -231,28 +233,39 @@ def mrd2nii_volume(metadata, volume_images, skip_sidecar=False):
             images_by_rep_number[rep] = []
         images_by_rep_number[rep].append(volume_image)
 
-    if max(images_by_rep_number.keys()) != len(images_by_rep_number) - 1:
+    if max(images_by_rep_number.keys()) != len(images_by_rep_number) - 1 or min(images_by_rep_number.keys()) != 0:
         raise ValueError("Repetition numbers should be consecutive and start from 0.")
 
-    nii = None
-    for rep in sorted(images_by_rep_number.keys()):
-        nii_volume = None
-        for i, volume_image in enumerate(images_by_rep_number[rep]):
-            nii_stack = mrd2nii_stack(metadata, volume_image, include_slice_gap=True)
-            nii_volume = merge_stacks_into_volume(nii_volume, nii_stack)
-        nii = merge_repetitions(nii, nii_volume)
+    # Process the first volume to get nii metadata and dimensions
+    nii_volume = None
+    for i, volume_image in enumerate(images_by_rep_number[0]):
+        nii_stack = mrd2nii_stack(metadata, volume_image, include_slice_gap=True)
+        nii_volume = merge_stacks_into_volume(nii_volume, nii_stack)
+
+    # If there are many repetitions
+    if len(images_by_rep_number) > 1:
+        # Allocate all repetitions (to avoid memory overuse)
+        data = np.zeros(nii_volume.shape + (len(images_by_rep_number),), dtype=nii_volume.dataobj.dtype)
+        # Assign first repetition
+        data[..., 0] = np.asarray(nii_volume.dataobj)
+
+        # Process all other repetitions
+        for rep in tqdm(range(1, len(images_by_rep_number))):
+            nii_volume = None
+            for i, volume_image in enumerate(images_by_rep_number[rep]):
+                nii_stack = mrd2nii_stack(metadata, volume_image, include_slice_gap=True)
+                nii_volume = merge_stacks_into_volume(nii_volume, nii_stack)
+            data[..., rep] = np.asarray(nii_volume.dataobj)
+
+        nii = nib.Nifti1Image(data, nii_volume.affine, header=nii_volume.header)
+    else:
+        nii = nii_volume
 
     if not skip_sidecar:
-        # Grab all images for a single volume (repetition 0)
-        a_volume_image = []
-        for i in range(len(volume_images)):
-            if volume_images[i].getHead().repetition == 0:
-                a_volume_image.append(volume_images[i])
-
-        sidecar = create_bids_sidecar(metadata, a_volume_image, nii.header.get_dim_info())
+        sidecar = create_bids_sidecar(metadata, images_by_rep_number[0], nii.header.get_dim_info())
         if sidecar.get('SliceTiming') is not None:
             # Reorder slice timing if we needed to flip it when creating the Nifti
-            if get_main_dir(a_volume_image[0].meta['ImageSliceNormDir']) == 0:
+            if get_main_dir(images_by_rep_number[0][0].meta['ImageSliceNormDir']) == 0:
                 sidecar['SliceTiming'] = sidecar['SliceTiming'][::-1]
     else:
         sidecar = None
@@ -431,10 +444,10 @@ def merge_stacks_into_volume(nii1, nii2):
 
     # If inputs are 2D arrays, convert them to 3D. The zoom needs to be set correctly because it was 1 since it was 2D
     if nii1.ndim == 2:
-        nii1 = nib.Nifti1Image(nii1.get_fdata()[..., np.newaxis], affine=nii1.affine, header=nii1.header)
+        nii1 = nib.Nifti1Image(np.asarray(nii1.dataobj)[..., np.newaxis], affine=nii1.affine, header=nii1.header)
         nii1.header.set_zooms(npl.norm(nii1.affine[:3, :3], axis=0))
     if nii2.ndim == 2:
-        nii2 = nib.Nifti1Image(nii2.get_fdata()[..., np.newaxis], affine=nii2.affine, header=nii2.header)
+        nii2 = nib.Nifti1Image(np.asarray(nii2.dataobj)[..., np.newaxis], affine=nii2.affine, header=nii2.header)
         nii2.header.set_zooms(npl.norm(nii2.affine[:3, :3], axis=0))
 
     if not np.allclose(nii1.header.get_zooms(), nii2.header.get_zooms()):
@@ -502,19 +515,5 @@ def merge_stacks_into_volume(nii1, nii2):
 
     master_data = np.nan_to_num(master_data, nan=0.0)
     nii_merged = nib.Nifti1Image(master_data, affine=master_affine, header=nii1.header)
-
-    return nii_merged
-
-
-def merge_repetitions(nii, nii_volume):
-    if nii is None:
-        return nii_volume
-
-    if nii.ndim == 3:
-        data_nii = nii.get_fdata()[..., np.newaxis]
-    else:
-        data_nii = nii.get_fdata()
-    data = np.concatenate((data_nii, nii_volume.get_fdata()[..., np.newaxis]), axis=3)
-    nii_merged = nib.Nifti1Image(data, nii.affine, header=nii.header)
 
     return nii_merged
