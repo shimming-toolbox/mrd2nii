@@ -19,9 +19,11 @@ logger = logging.getLogger(__name__)
               help="Input path to MRD folder/file")
 @click.option('-o', '--output', 'path_output', type=click.Path(), required=True,
               help="Path to output folder")
-# @click.option('-v', '--verbose', type=click.Choice(['info', 'debug']), default='info',
-#               help="Be more verbose")
-def mrd2nii_int(path_mrd, path_output):
+@click.option('-v', '--verbose', type=click.Choice(['info', 'debug']), default='info',
+              help="Be more verbose")
+def mrd2nii_int(path_mrd, path_output, verbose):
+    set_all_loggers(verbose)
+
     if not os.path.exists(path_mrd):
         raise FileNotFoundError(f"Output folder does not exist: {path_mrd}")
 
@@ -44,3 +46,27 @@ def mrd2nii_int(path_mrd, path_output):
 
     if n_files_converted <= 0:
         raise ValueError(f"No MRD files found in the input path: {path_mrd}")
+
+
+def set_all_loggers(verbose, list_exclude=('matplotlib', 'indexed_gzip')):
+    """ Set all loggers in the root manager to the verbosity level. Exclude any logger with the name in list_exclude
+
+    Args:
+        verbose (str): Verbosity level: 'info', 'debug', 'warning', 'critical', 'error'
+        list_exclude: List of string to exclude from logging
+    """
+    loggers = []
+    # For every logger name
+    for name in logging.root.manager.loggerDict:
+
+        # Exclude the setting level if it is in the excluded list
+        is_excluded = False
+        for exclude in list_exclude:
+            if name.startswith(exclude):
+                is_excluded = True
+
+        if not is_excluded:
+            loggers.append(logging.getLogger(name))
+
+    for a_logger in loggers:
+        a_logger.setLevel(verbose.upper())
