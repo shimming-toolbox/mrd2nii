@@ -27,6 +27,8 @@ def mrd2nii_dset(dset: ismrmrd.Dataset, output_dir):
     Returns:
         None
     """
+    logger.info("Converting MRD Dataset to NIfTI format")
+
     groups = dset.list()
     if 'xml' not in groups:
         raise RuntimeError("No XML header found in the dataset")
@@ -101,7 +103,6 @@ def extract_in_chunks(dset, group):
     chunks = []
     rotms = []
     for i_img in range(0, dset.number_of_images(group)):
-        # Todo: Better way to do this? This is quite slow
         image = dset.read_image(group, i_img)
         rotm = extract_rot_matrix(image)
         # Check if we have a chunk with the same rotation matrix
@@ -262,6 +263,7 @@ def mrd2nii_volume(metadata, volume_images, skip_sidecar=False):
         nii = nii_volume
 
     if not skip_sidecar:
+        logger.info("Creating BIDS sidecar")
         sidecar = create_bids_sidecar(metadata, images_by_rep_number[0], nii.header.get_dim_info())
         if sidecar.get('SliceTiming') is not None:
             # Reorder slice timing if we needed to flip it when creating the Nifti
