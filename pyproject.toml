@@ -10,7 +10,8 @@ dependencies = [
     "ismrmrd==1.14.1",
     "nibabel",
     "numpy",
-    "pytest"
+    "pytest",
+    "tqdm"
 ]
 requires-python = ">= 3.10"
 authors = [

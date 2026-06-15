@@ -34,6 +34,8 @@ def mrd2nii_int(path_mrd, path_output, verbose):
     else:
         raise ValueError(f"Input path is neither a folder nor a file: {path_mrd}")
 
+    logger.info("Starting MRD to NIfTI conversion...")
+
     n_files_converted = 0
     for file in list_files:
         if not os.path.splitext(file)[1] in [".mrd", ".h5"]:
