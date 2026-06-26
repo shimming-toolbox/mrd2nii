@@ -890,7 +890,7 @@ def extract_phase_encoding_direction(volume_image, vendor_header, dim_info):
     # TRA
     if get_main_dir(volume_image.meta["ImageSliceNormDir"]) == 2:
         if vendor_header["sAAInitialOffset"]["SliceInformation"].get('dInPlaneRot') is None or \
-                np.isclose(vendor_header["sAAInitialOffset"]["SliceInformation"]['dInPlaneRot'], 0):
+                np.isclose(float(vendor_header["sAAInitialOffset"]["SliceInformation"]['dInPlaneRot']), 0):
             direction = "-"
         elif np.isclose(float(vendor_header["sAAInitialOffset"]["SliceInformation"]['dInPlaneRot']), math.pi) or \
             np.isclose(float(vendor_header["sAAInitialOffset"]["SliceInformation"]['dInPlaneRot']), -math.pi):
@@ -904,7 +904,7 @@ def extract_phase_encoding_direction(volume_image, vendor_header, dim_info):
     # SAG
     elif get_main_dir(volume_image.meta["ImageSliceNormDir"]) == 1:
         if vendor_header["sAAInitialOffset"]["SliceInformation"].get('dInPlaneRot') is None or \
-                np.isclose(vendor_header["sAAInitialOffset"]["SliceInformation"]['dInPlaneRot'], 0):
+                np.isclose(float(vendor_header["sAAInitialOffset"]["SliceInformation"]['dInPlaneRot']), 0):
             direction = ""
         elif np.isclose(float(vendor_header["sAAInitialOffset"]["SliceInformation"]['dInPlaneRot']), math.pi):
             direction = "-"
@@ -916,7 +916,7 @@ def extract_phase_encoding_direction(volume_image, vendor_header, dim_info):
             raise NotImplementedError("In-plane rotation not supported for phase encoding direction extraction")
     elif get_main_dir(volume_image.meta["ImageSliceNormDir"]) == 0:
         if vendor_header["sAAInitialOffset"]["SliceInformation"].get('dInPlaneRot') is None or \
-                np.isclose(vendor_header["sAAInitialOffset"]["SliceInformation"]['dInPlaneRot'], 0):
+                np.isclose(float(vendor_header["sAAInitialOffset"]["SliceInformation"]['dInPlaneRot']), 0):
             direction = ""
         elif np.isclose(float(vendor_header["sAAInitialOffset"]["SliceInformation"]['dInPlaneRot']), math.pi):
             direction = "-"
