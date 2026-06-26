@@ -26,13 +26,13 @@ def create_bids_sidecar(metadata, volume_images, dim_info=(None, None, None)):
         "Manufacturer": metadata.acquisitionSystemInformation.systemVendor,
         "ManufacturersModelName": metadata.acquisitionSystemInformation.systemModel,
         "InstitutionName": metadata.acquisitionSystemInformation.institutionName,
-        # "InstitutionAddress": "",
+        "InstitutionAddress": "",
         "DeviceSerialNumber": extract_device_serial_number(metadata),
         # "StationName": "",
         # "BodyPart": "",
         "PatientPosition": metadata.measurementInformation.patientPosition.value,
         # "ProcedureStepDescription": "",
-        # "SoftwareVersions": "",
+        "SoftwareVersions": "",
         "MRAcquisitionType": "",
         # "StudyDescription": "",
         "SeriesDescription": img_metas[0].get("SequenceDescription"),
@@ -116,20 +116,25 @@ def create_bids_sidecar(metadata, volume_images, dim_info=(None, None, None)):
     else:
         sidecar.pop("ParallelReductionFactorOutOfPlane")
 
-    vendor_header = read_vendor_header_metadata(metadata)
-    sidecar["ScanOptions"] = extract_scan_options(metadata, vendor_header)
-    if vendor_header is not None:
-        sidecar["PulseSequenceDetails"] = vendor_header.get("tSequenceFileName")
-        sidecar["BaseResolution"] = int(vendor_header["sKSpace"].get("lBaseResolution"))
-        sidecar["ShimSetting"] = extract_shim_settings(vendor_header)
-        sidecar["ReceiveCoilName"] = extract_receive_coil_name(vendor_header)
-        sidecar["CoilString"] = extract_coil_string(vendor_header)
-        sidecar["ConsistencyInfo"] = vendor_header.get("ulVersion")
-        if vendor_header["sPat"].get("lRefLinesPE") is None:
+    measyaps, dicom = read_vendor_header_metadata(metadata)
+    if measyaps is not None:
+        sidecar["ScanOptions"] = extract_scan_options(metadata, measyaps)
+        sidecar["PulseSequenceDetails"] = measyaps.get("tSequenceFileName")
+        sidecar["BaseResolution"] = int(measyaps["sKSpace"].get("lBaseResolution"))
+        sidecar["ShimSetting"] = extract_shim_settings(measyaps)
+        sidecar["ReceiveCoilName"] = extract_receive_coil_name(measyaps)
+        sidecar["CoilString"] = extract_coil_string(measyaps)
+        sidecar["ConsistencyInfo"] = measyaps.get("ulVersion")
+        if measyaps["sPat"].get("lRefLinesPE") is None:
             sidecar.pop("RefLinesPE")
         else:
-            sidecar["RefLinesPE"] = int(vendor_header["sPat"].get("lRefLinesPE"))
-        sidecar['PhaseEncodingDirection'] = extract_phase_encoding_direction(volume_images[0], vendor_header, dim_info)
+            sidecar["RefLinesPE"] = int(measyaps["sPat"].get("lRefLinesPE"))
+        sidecar['PhaseEncodingDirection'] = extract_phase_encoding_direction(volume_images[0], measyaps, dim_info)
+
+    if dicom is not None:
+        sidecar["InstitutionAddress"] = dicom.get("InstitutionAddress")
+        sidecar["SoftwareVersions"] = dicom.get("SoftwareVersions")
+
 
     # Todo: GRAPPA: sPat['ucPATMode']. Need to verify what a sense scan does
 
@@ -196,22 +201,32 @@ def extract_shim_settings(vhdr_metadata):
 
     shim_settings = []
     # Gradients (1st order)
-    if vhdr_metadata["sGRADSPEC"].get("asGPAData[0]") is None:
-        shim_settings = [None] * 3
+    grad_names = ["lOffsetX", "lOffsetY", "lOffsetZ"]
+    if vhdr_metadata["sGRADSPEC"].get("asGPAData[0]") is not None:
+        gpa_name = "asGPAData[0]"
+    elif vhdr_metadata["sGRADSPEC"].get("asGPAData") is not None:
+        gpa_name = "asGPAData"
     else:
-        grad_names = ["lOffsetX", "lOffsetY", "lOffsetZ"]
+        gpa_name = None
+
+    if gpa_name is not None:
         for grad_name in grad_names:
-            if vhdr_metadata["sGRADSPEC"]["asGPAData[0]"].get(grad_name) is None:
+            if vhdr_metadata["sGRADSPEC"][gpa_name].get(grad_name) is None:
                 shim_settings.append(None)
             else:
-                shim_settings.append(int(vhdr_metadata["sGRADSPEC"]["asGPAData[0]"][grad_name]))
+                shim_settings.append(int(vhdr_metadata["sGRADSPEC"][gpa_name][grad_name]))
+    else:
+        shim_settings = [None] * 3
 
     # 2nd order
     for i in range(5):
-        if vhdr_metadata["sGRADSPEC"].get(f"alShimCurrent[{i}]") is None:
-            shim_settings.append(None)
-        else:
+        if vhdr_metadata["sGRADSPEC"].get(f"alShimCurrent[{i}]") is not None:
             shim_settings.append(int(vhdr_metadata["sGRADSPEC"][f"alShimCurrent[{i}]"]))
+            continue
+        if vhdr_metadata["sGRADSPEC"].get("alShimCurrent") is not None:
+            shim_settings.append(int(vhdr_metadata["sGRADSPEC"]["alShimCurrent"][i]))
+            continue
+        shim_settings.append(None)
 
     # If it's an array of None, return empty list
     if np.all([s is None for s in shim_settings]):
@@ -307,6 +322,322 @@ def extract_non_lin_gradient_corr(img_meta):
         return ""
 
 
+def parse_xproto(head: str, array_data=None):
+    # <XProtocol>{example}
+    def parse_data(head, type, array_value):
+        def my_bool_comp(a_string):
+            if not isinstance(a_string, str):
+                raise ValueError(f"Expected a string for boolean conversion, got {type(a_string)}")
+            a_string = a_string.strip().strip("\n").strip("\"")
+            if a_string.lower() in ['true', '1']:
+                return True
+            elif a_string.lower() in ['false', '0']:
+                return False
+            else:
+                raise ValueError(f"Cannot convert string to boolean: {a_string}")
+
+        type_conversion = {
+            'int': int,
+            'long': int,
+            'float': float,
+            'double': float,
+            'bool': my_bool_comp
+        }
+        default_value = {
+            'int': 0,
+            'long': 0,
+            'float': 0.0,
+            'double': 0.0,
+            'bool': None
+        }
+
+        def _parse_data(data, type):
+            data = data.strip()
+            if data != "":
+                if len(data.split(" ")) > 1:
+                    # Create a list of values
+                    data = data.strip().strip("\n")
+                    # Remove comments if any:
+                    if data.find("<Comment>") != -1:
+                        idx_start = data.find("<Comment>")
+                        idx_end = data.find("\n", idx_start)
+                        data = data[:idx_start] + data[idx_end:]
+                        data = data.strip().strip("\n")
+
+                        if data.strip("\"") == "":
+                            return None
+
+                    value = []
+                    vals = data.split(" ")
+                    for i_val, val in enumerate(vals):
+                        if val.strip().strip("\n") == "<Default>":
+                            value = type_conversion[type](vals[i_val + 1])
+                            break
+                        if val.strip().strip("\n") != "":
+                            value.append(type_conversion[type](val.strip().strip("\n")))
+                else:
+                    value = type_conversion[type](data)
+            else:
+                # Default values
+                value = default_value[type]
+
+            return value
+
+        value = _parse_data(head, type)
+
+        if array_value is not None:
+            val = _parse_data(array_value, type)
+            logger.debug(f"Array value found {val} vs value found: {value}")
+            value = val
+
+        return value
+
+    def parse_choice(head):
+        head = head.strip().strip("\n")
+        if "<Limit>" not in head[:7]:
+            raise RuntimeError("No Limit tag in ParamChoice")
+
+        idx_open = head.find("{")
+        idx_close = head.find("}")
+        if idx_open == -1 or idx_close == -1:
+            raise RuntimeError("No opening or closing bracket in ParamChoice")
+        limit = parse_list_of_strings(head[idx_open + 1:idx_close])
+
+        head = head[idx_close + 1:].strip()
+
+        if head.find("<Default>") == -1:
+            raise RuntimeError("No Default tag in ParamChoice")
+
+        head = head.strip("<Default>")
+        end_idx = head.find("\n")
+        default_value = head.strip()[1:end_idx].strip()
+
+        if head.strip(f"\"{default_value}\"").strip() != "":
+            raise RuntimeError("Extra information after Default tag in ParamChoice")
+
+        return {
+            "Limit": limit,
+            "Default": default_value
+        }
+
+    def parse_list_of_strings(head):
+        value = []
+        while len(head) > 0:
+            idx_open = head.find("\"")
+            idx_close = head.find("\"", idx_open + 1)
+            if idx_open == -1 or idx_close == -1:
+                break
+            value.append(str(head[idx_open+1:idx_close]))
+            head = head[idx_close+1:]
+        return value
+
+    def parse_array(head: str, array_data=None):
+        try:
+            head = head.strip().strip("\n")
+            if "<DefaultSize>" not in head[:13]:
+                raise RuntimeError("No DefaultSize tag in ParamArray")
+
+            head = head.strip("<DefaultSize>")
+            ind = head.find("\n")
+            if ind == -1:
+                raise RuntimeError("No new line after DefaultSize tag in ParamArray")
+
+            default_size = int(head[:ind].strip())
+
+            head = head[ind:].strip()
+            if "<MaxSize>" not in head[:9]:
+                raise RuntimeError("No MaxSize tag in ParamArray")
+
+            head = head.strip("<MaxSize>")
+            ind = head.find("\n")
+            if ind == -1:
+                raise RuntimeError("No new line after MaxSize tag in ParamArray")
+
+            max_size = int(head[:ind].strip())
+
+            head = head[ind:].strip()
+            if "<Default>" not in head[:9]:
+                raise RuntimeError("No Default tag in ParamArray")
+            head = head.strip("<Default>").strip()
+            if "<ParamString.\"\">" in head[:16]:
+                ind = head.find("\n")
+                head = head[ind:].strip()
+                output = []
+                while len(head) > 0:
+                    ind_end_bracket = head.find("}")
+                    entry = head[:ind_end_bracket].strip("{").strip("}").strip()
+                    output.append(entry.strip("\"") if entry != "" else "")
+                    head = head[ind_end_bracket + 1:]
+            elif "<ParamMap.\"\">" in head[:13]:
+                # extract_header from data
+                idxs = find_matching_brackets(head)
+                if idxs is None:
+                    raise RuntimeError("No matching brackets found in ParamArray (header)")
+                head_start, head_end = idxs
+                new_head = head[head_start:head_end]
+
+                array_list = []
+                more_elements = True
+                value_end = head_end
+                array_end = 0
+                while more_elements:
+                    if head[value_end+1:] == "":
+                        break
+                    idxs = find_matching_brackets(head, value_end + 1)
+                    if idxs is None:
+                        raise RuntimeError("No idx found")
+
+                    value_start, value_end = idxs
+                    value = head[value_start:value_end]
+
+                    if array_data is not None:
+                        idxs = find_matching_brackets(array_data, array_end + 1)
+                        if idxs is None:
+                            raise RuntimeError("Not the same amount of data in array and header")
+                        else:
+                            array_start, array_end = idxs
+                        array = array_data[array_start:array_end]
+                        array_list.append(parse_xproto(new_head, array))
+                    else:
+                        array_list.append(parse_xproto(new_head, value))
+                if len(array_list) > 1:
+                    output = array_list
+                else:
+                    output = array_list[0]
+            elif "<ParamDouble.\"\">" in head[:16]:
+                output = head
+            elif "<ParamLong.\"\">" in head[:14]:
+                output = head
+            elif "<ParamArray.\"\">" in head[:15]:
+                output = head
+            else:
+                raise RuntimeError("No ParamString or ParamMap tag in ParamArray")
+
+            return output
+
+        except Exception as e:
+            logger.warning(f"Failed to parse ParamArray:{head}")
+            return []
+
+    def extract_param_type_and_name(siemens_hdr_name: str):
+        # <ParamString."SequenceString">
+        if siemens_hdr_name.find(".") == -1:
+            if siemens_hdr_name == "Class":
+                return "Class", ""
+            else:
+                return "", siemens_hdr_name
+
+        param_type = siemens_hdr_name.strip("<")[:siemens_hdr_name.find(".")]
+        param_name = siemens_hdr_name[
+                     siemens_hdr_name.find("\"") + 1:len(siemens_hdr_name) - siemens_hdr_name[::-1].find("\"") - 1]
+
+        return param_type, param_name
+
+    def find_matching_brackets(head, start_from=0):
+        idx_start_value = head.find("{", start_from) + 1
+        if idx_start_value == -1:
+            return
+        bracket_running_open_close = 1
+        idx = idx_start_value
+        while bracket_running_open_close:
+            idx_open = head.find("{", idx)
+            idx_close = head.find("}", idx)
+            if idx_open != -1 and idx_close != -1:
+                if idx_open < idx_close:
+                    idx = idx_open + 1
+                    bracket_running_open_close += 1
+                else:
+                    idx = idx_close + 1
+                    bracket_running_open_close -= 1
+            elif idx_open != -1:
+                idx = idx_open + 1
+                bracket_running_open_close += 1
+            elif idx_close != -1:
+                idx = idx_close + 1
+                bracket_running_open_close -= 1
+            else:
+                raise RuntimeError("No closing bracket found")
+
+        idx_end_value = idx - 1
+        if idx_end_value == -1:
+            return
+        return idx_start_value, idx_end_value
+
+    def find_idxs_of_tags(head, idx_master=0):
+        idx_start_name = head.find("<", idx_master) + 1
+        if idx_start_name == -1:
+            return
+        idx_end_name = head.find(">", idx_master)
+        if idx_end_name == -1:
+            return
+
+        idxs = find_matching_brackets(head, idx_master)
+        if idxs is None:
+            return
+
+        idx_start_value, idx_end_value = idxs
+
+        return idx_start_name, idx_end_name, idx_start_value, idx_end_value
+
+    parsed = {}
+    idx_master = 0
+    idx_start_array = 0
+    idx_end_array = 1
+    while len(head.strip().strip("\n")) > idx_master:
+        idxs = find_idxs_of_tags(head, idx_master)
+        if idxs is None:
+            return head.strip()
+        idx_start_name, idx_end_name, idx_start_value, idx_end_value = idxs
+        param_type, param_name = extract_param_type_and_name(head[idx_start_name:idx_end_name])
+
+        if array_data is not None:
+            idx_start_array, idx_end_array = find_matching_brackets(array_data, idx_start_array)
+            if param_type not in ["ParamLong", "ParamDouble", "ParamMap", "ParamBool", "ParamString", "ParamArray"]:
+                logging.warning(f"Not implemented array type for {param_type}. Ignoring array data for this parameter.")
+
+        value = head[idx_start_value:idx_end_value]
+        array = array_data[idx_start_array:idx_end_array] if array_data is not None else None
+        if param_name in ["SliceInformation", "dInPlaneRot", "asGPAData"]:
+            pass
+        if param_type == "ParamArray":
+            parsed[param_name] = parse_array(value, array)
+        elif param_type == "ParamMap":
+            parsed[param_name] = parse_xproto(value, array)
+        elif param_type == "ParamLong":
+            parsed[param_name] = parse_data(value, "long", array)
+        elif param_type == "ParamDouble":
+            parsed[param_name] = parse_data(value, "double", array)
+        elif param_type == "ParamString":
+            if array_data is not None:
+                parsed[param_name] = array.strip().strip("\"")
+            else:
+                parsed[param_name] = value.strip().strip("\"")
+        elif param_type == "ParamBool":
+            parsed[param_name] = parse_data(value, "bool", array)
+        elif param_type == "ParamChoice":
+            parsed[param_name] = parse_choice(value)
+        elif param_type == "Class":
+            # Class is not like the other parameters
+            # Find its name
+            idx_class_start = head.find("\"")
+            idx_class_end = head.find("\"", idx_class_start + 1)
+            param_name = head[idx_class_start:idx_class_end]
+            parsed[param_name] = parse_xproto(head[idx_class_end+1:])
+        elif param_type == "Method" or param_type == "Event":
+            parsed[param_name] = parse_list_of_strings(value.strip("\n").strip())
+        elif param_type == "Connection":
+            parsed[param_name] = value.strip("\n").strip()
+        elif param_type == "ProtocolComposer":
+                parsed[param_name] = value.strip("\n").strip()
+        else:
+            parsed[param_name] = parse_xproto(value)
+        idx_master = idx_end_value + 1
+        if array_data is not None:
+            idx_start_array = idx_end_array + 1
+
+    return parsed
+
+
 def read_vendor_header_img(image):
     meta = ismrmrd.Meta.deserialize(image.attribute_string)
     # logger.info(meta.keys())
@@ -318,180 +649,44 @@ def read_vendor_header_img(image):
     if vendor_header is None:
         return None
 
-    def parse(head: str):
-        # <XProtocol>{example}
-        def parse_array(head: str):
-            try:
-                head = head.strip().strip("\n")
-                if "<DefaultSize>" not in head[:13]:
-                    raise RuntimeError("No DefaultSize tag in ParamArray")
-
-                # head = head.strip("<DefaultSize>")
-                ind = head.find("\n")
-                if ind == -1:
-                    raise RuntimeError("No new line after DefaultSize tag in ParamArray")
-
-                head = head[ind:].strip()
-                if "<MaxSize>" not in head[:9]:
-                    raise RuntimeError("No MaxSize tag in ParamArray")
-
-                ind = head.find("\n")
-                if ind == -1:
-                    raise RuntimeError("No new line after MaxSize tag in ParamArray")
-
-                head = head[ind:].strip()
-                if "<Default>" not in head[:9]:
-                    raise RuntimeError("No Default tag in ParamArray")
-                head = head.strip("<Default>").strip()
-                if "<ParamString.\"\">" not in head[:16]:
-                    raise RuntimeError("No ParamString tag in ParamArray")
-                ind = head.find("\n")
-                if ind == -1:
-                    raise RuntimeError("No new line after Default/ParamString tag in ParamArray")
-                head = head[ind:].strip()
-                output = []
-                while len(head) > 0:
-                    ind_end_bracket = head.find("}")
-                    entry = head[:ind_end_bracket].strip("{").strip("}").strip()
-                    output.append(entry.strip("\"") if entry != "" else "")
-                    head = head[ind_end_bracket + 1:]
-                return output
-
-            except Exception:
-                logger.warning(f"Failed to parse ParamArray:{head}")
-                return []
-
-        def extract_param_type_and_name(siemens_hdr_name: str):
-            # <ParamString."SequenceString">
-            if siemens_hdr_name.find(".") == -1:
-                return "", siemens_hdr_name
-
-            param_type = siemens_hdr_name.strip("<")[:siemens_hdr_name.find(".")]
-            param_name = siemens_hdr_name[
-                         siemens_hdr_name.find("\"") + 1:len(siemens_hdr_name) - siemens_hdr_name[::-1].find("\"") - 1]
-
-            return param_type, param_name
-
-        parsed = {}
-        idx_master = 0
-        while len(head.strip().strip("\n")) > idx_master:
-            idx_start_name = head.find("<", idx_master) + 1
-            if idx_start_name == -1:
-                return head.strip()
-            idx_end_name = head.find(">", idx_master)
-            if idx_end_name == -1:
-                return head.strip()
-            idx_start_value = head.find("{", idx_master) + 1
-            if idx_start_value == -1:
-                return head.strip()
-            bracket_running_open_close = 1
-            idx = idx_start_value
-            while bracket_running_open_close:
-                idx_open = head.find("{", idx)
-                idx_close = head.find("}", idx)
-                if idx_open != -1 and idx_close != -1:
-                    if idx_open < idx_close:
-                        idx = idx_open + 1
-                        bracket_running_open_close += 1
-                    else:
-                        idx = idx_close + 1
-                        bracket_running_open_close -= 1
-                elif idx_open != -1:
-                    idx = idx_open + 1
-                    bracket_running_open_close += 1
-                elif idx_close != -1:
-                    idx = idx_close + 1
-                    bracket_running_open_close -= 1
-                else:
-                    raise RuntimeError("No closing bracket found")
-
-            idx_end_value = idx - 1
-            if idx_end_value == -1:
-                return head.strip()
-
-            param_type, param_name = extract_param_type_and_name(head[idx_start_name:idx_end_name])
-            if param_type == "ParamArray":
-                parsed[param_name] = parse_array(head[idx_start_value:idx_end_value])
-            elif param_type == "ParamMap":
-                parsed[param_name] = parse(head[idx_start_value:idx_end_value])
-            elif param_type == "ParamLong":
-                if head[idx_start_value:idx_end_value].strip() != "":
-                    parsed[param_name] = int(head[idx_start_value:idx_end_value].strip())
-                else:
-                    parsed[param_name] = head[idx_start_value:idx_end_value].strip()
-            elif param_type == "ParamDouble":
-                if head[idx_start_value:idx_end_value].strip() != "":
-                    parsed[param_name] = float(head[idx_start_value:idx_end_value].strip())
-                else:
-                    parsed[param_name] = head[idx_start_value:idx_end_value].strip()
-            elif param_type == "ParamString":
-                parsed[param_name] = head[idx_start_value:idx_end_value].strip().strip("\"")
-            else:
-                parsed[param_name] = parse(head[idx_start_value:idx_end_value])
-            idx_master = idx_end_value + 1
-
-        return parsed
-
-    head_dict = parse(vendor_header)
+    head_dict = parse_xproto(vendor_header)
     head_dict = head_dict["XProtocol"][""]["DICOM"]
+    # head_dict["XProtocol"][""]["CONTROL"] also exists but does not have much information
     if head_dict.get('SliceNo') == '':
         head_dict['SliceNo'] = 0
     if head_dict.get('TimeAfterStart') == '':
         head_dict['TimeAfterStart'] = 0
     if head_dict.get('ProtocolSliceNumber') == '':
         head_dict['ProtocolSliceNumber'] = 0
-
-    # example
-    # {'NumberInSeries': ' 2 ',
-    # 'AcquisitionDate': ' "20250415" ',
-    # 'AcquisitionTime': ' "172708.825000" ',
-    # 'AcquisitionNumber': ' 1 ',
-    # 'EchoNumber': ' 1 ',
-    # 'SliceNo': {},
-    # 'TR': ' 1170 ',
-    # 'TE': ' 40 ',
-    # 'SliceMeasurementDuration': ' 21000 ',
-    # 'SequenceDescription': ' "ep2d_bold_shimming" ',
-    # 'TimeAfterStart': {},
-    # 'SpacingBetweenSlices': ' 15 ',
-    # 'UsedChannelString': ' "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX" ',
-    # 'SequenceString': ' "epfid2d1_96" ',
-    # 'EchoColumnPosition': ' 48 ',
-    # 'EchoLinePosition': ' 48 ',
-    # 'EchoPartitionPosition': ' 32 ',
-    # 'RealDwellTime': ' 2700 ',
-    # 'EchoTrainLength': ' 1 ',
-    # 'NoOfAverages': ' 1 ',
-    # 'NoOfPhaseEncodingSteps': ' 96 ',
-    # 'PercentPhaseFoV': ' 100 ',
-    # 'PercentSampling': ' 100 ',
-    # 'ProtocolSliceNumber': ' 1 ',
-    # 'SequenceMask': {},
-    # 'BandwidthPerPixelPhaseEncode': ' 17.96 ',
-    # 'BitsStored': ' 12 ',
-    # 'CoilString': ' "HC1-7;NC1" ',
-    # 'AcquisitionContrast': ' "UNKNOWN" ',
-    # 'ImageType': ' "ORIGINAL\\PRIMARY\\FMRI\\NONE" ',
-    # 'ImageHistory': ' "ChannelMixing:ND=true_CMM=1_CDM=1\\ACCAlgo:16" ',
-    # 'ImageTypeValue3': ' "M" ',
-    # 'ComplexImageComponent': ' "MAGNITUDE" ',
-    # 'PixelRepresentation': {},
-    # 'SOPInstanceUID': ' "1.3.12.2.1107.5.2.43.167006.2025041517270898436002838" '}
-    # logger.info(head_dict)
     return head_dict
 
 
 def read_vendor_header_metadata(metadata):
     """ I believe this is the measYaps data structure """
-    vendor_header = None
+
+    # A few protocols seem possible:
+    # - SiemensBuffer_PROTOCOL_MeasYaps
+    # - SiemensBuffer_PROTOCOL_Phoenix
+    # - SiemensBuffer_PROTOCOL_Meas
+    measyaps = None
+    dicom = None
     for param in metadata.userParameters.userParameterBase64:
         if param.name == "SiemensBuffer_PROTOCOL_MeasYaps":
-            vendor_header = param.value
+            logger.debug("MeasYaps protocol found, trying to parse")
+            measyaps = read_measyaps(param.value)
+        if param.name == "SiemensBuffer_PROTOCOL_Phoenix":
+            logger.warning("Phoenix protocol found, but not yet supported")
+            logger.debug(param.value)
+        if param.name == "SiemensBuffer_PROTOCOL_Meas":
+            logger.debug("Meas protocol found")
+            head_dict = parse_xproto(str(param.value.decode('utf-8')))
+            # merge 2 dicts
+            measyaps = head_dict["XProtocol"][""]["MEAS"] | head_dict["XProtocol"][""]["YAPS"]
+            dicom = head_dict["XProtocol"][""]["DICOM"]
 
-    if vendor_header is None:
-        logger.warning("No vendor header")
-        return None
+    return measyaps, dicom
 
+def read_measyaps(vendor_header):
     header_dict = {}
     for i, line in enumerate(vendor_header.decode().split("\n")):
         # Skip comments and termination lines
@@ -694,7 +889,8 @@ def extract_phase_encoding_direction(volume_image, vendor_header, dim_info):
 
     # TRA
     if get_main_dir(volume_image.meta["ImageSliceNormDir"]) == 2:
-        if vendor_header["sAAInitialOffset"]["SliceInformation"].get('dInPlaneRot') is None:
+        if vendor_header["sAAInitialOffset"]["SliceInformation"].get('dInPlaneRot') is None or \
+                np.isclose(vendor_header["sAAInitialOffset"]["SliceInformation"]['dInPlaneRot'], 0):
             direction = "-"
         elif np.isclose(float(vendor_header["sAAInitialOffset"]["SliceInformation"]['dInPlaneRot']), math.pi) or \
             np.isclose(float(vendor_header["sAAInitialOffset"]["SliceInformation"]['dInPlaneRot']), -math.pi):
@@ -707,7 +903,8 @@ def extract_phase_encoding_direction(volume_image, vendor_header, dim_info):
             raise NotImplementedError("In-plane rotation not supported for phase encoding direction extraction")
     # SAG
     elif get_main_dir(volume_image.meta["ImageSliceNormDir"]) == 1:
-        if vendor_header["sAAInitialOffset"]["SliceInformation"].get('dInPlaneRot') is None:
+        if vendor_header["sAAInitialOffset"]["SliceInformation"].get('dInPlaneRot') is None or \
+                np.isclose(vendor_header["sAAInitialOffset"]["SliceInformation"]['dInPlaneRot'], 0):
             direction = ""
         elif np.isclose(float(vendor_header["sAAInitialOffset"]["SliceInformation"]['dInPlaneRot']), math.pi):
             direction = "-"
@@ -718,7 +915,8 @@ def extract_phase_encoding_direction(volume_image, vendor_header, dim_info):
         else:
             raise NotImplementedError("In-plane rotation not supported for phase encoding direction extraction")
     elif get_main_dir(volume_image.meta["ImageSliceNormDir"]) == 0:
-        if vendor_header["sAAInitialOffset"]["SliceInformation"].get('dInPlaneRot') is None:
+        if vendor_header["sAAInitialOffset"]["SliceInformation"].get('dInPlaneRot') is None or \
+                np.isclose(vendor_header["sAAInitialOffset"]["SliceInformation"]['dInPlaneRot'], 0):
             direction = ""
         elif np.isclose(float(vendor_header["sAAInitialOffset"]["SliceInformation"]['dInPlaneRot']), math.pi):
             direction = "-"

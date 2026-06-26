@@ -53,7 +53,9 @@ def verify_sidecar(fname_sidecar, fname_expected_sidecar, skip_tags=None):
         "ParallelReductionFactorOutOfPlane",
         "MRAcquisitionType",
         "NonlinearGradientCorrection",
-        "PhaseEncodingDirection"
+        "PhaseEncodingDirection",
+        "InstitutionAddress",
+        "SoftwareVersions"
     ]
 
     with open(fname_sidecar, 'r', encoding='utf-8') as f:
