@@ -2,7 +2,7 @@
 # Mrd2nii
 
 ## Overview
-`Mrd2nii` converts ISMRMRD data into NIfTI images.
+`Mrd2nii` converts ISMRMRD data into NIfTI images with BIDS metadata.
 
 ## Features
 - Convert spatial images
