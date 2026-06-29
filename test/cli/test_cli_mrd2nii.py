@@ -160,7 +160,7 @@ def test_mrd2nii_dset5():
     assert np.allclose(nii.affine, nii_expected.affine, atol=1e-5)
     fname_expected_json = os.path.join(path_dataset, "nii", f"{file_name_expected_nii}.json")
     fname_json = os.path.join(path_output, f"{file_name_converted_nii}.json")
-    verify_sidecar(fname_json, fname_expected_json, skip_tags=["PhaseEncodingSteps"])
+    verify_sidecar(fname_json, fname_expected_json)
 
 
 def test_mrd2nii_dset6():
@@ -226,11 +226,7 @@ def test_mrd2nii_dset7():
     assert np.allclose(nii.affine, nii_expected.affine, atol=1e-5)
     fname_expected_json = os.path.join(path_dataset, "nii", f"{file_name_expected_nii}.json")
     fname_json = os.path.join(path_output, f"{file_name_converted_nii}.json")
-    verify_sidecar(fname_json, fname_expected_json, skip_tags=["SeriesDescription", "ImageType", "BaseResolution",
-                                                               "ShimSetting", "ReceiveCoilName", "CoilString",
-                                                               "PulseSequenceDetails", "ConsistencyInfo",
-                                                               "PhaseEncodingSteps", "DerivedVendorReportedEchoSpacing",
-                                                               "RefLinesPE", "MRAcquisitionType"])
+    verify_sidecar(fname_json, fname_expected_json, skip_tags=["SeriesDescription", "ImageType"], measyaps=False)
 
 
 def test_mrd2nii_dset8():
@@ -270,11 +266,8 @@ def test_mrd2nii_dset8():
         # Todo: Scanning Sequence is weird. The metadata says there is a TI of 300.s in MEGRE
         verify_sidecar(fname_json,
                        fname_expected_json,
-                       skip_tags=["SeriesDescription", "ScanOptions", "ImageType", "BaseResolution", "ShimSetting",
-                                  "ReceiveCoilName", "CoilString", "PulseSequenceDetails", "ConsistencyInfo",
-                                  "PhaseEncodingSteps", "DerivedVendorReportedEchoSpacing", "RefLinesPE",
-                                  "MRAcquisitionType", "PhaseEncodingDirection",
-                                  "ScanningSequence", "AcquisitionTime"])
+                       skip_tags=["ImageType", "ScanningSequence", "PhaseEncodingSteps", "PhaseEncodingSteps",
+                                  "SeriesDescription", "AcquisitionTime"], measyaps=False)
 
 
 def test_mrd2nii_dset9():
@@ -307,11 +300,8 @@ def test_mrd2nii_dset9():
     fname_json = os.path.join(path_output, f"{file_name_converted_nii}.json")
     verify_sidecar(fname_json,
                    fname_expected_json,
-                   skip_tags=["ScanningSequence", "ScanOptions", "ImageType", "BaseResolution", "ShimSetting",
-                              "ReceiveCoilName", "CoilString", "PulseSequenceDetails", "ConsistencyInfo",
-                              "PhaseEncodingSteps", "DerivedVendorReportedEchoSpacing", "RefLinesPE",
-                              "MRAcquisitionType", "FrequencyEncodingSteps", "AcquisitionMatrixPE",
-                              "PhaseEncodingDirection",])
+                   skip_tags=["ImageType", "AcquisitionMatrixPE", "ScanningSequence", "PhaseEncodingSteps",
+                              "FrequencyEncodingSteps"], measyaps=False)
 
 
 def test_mrd2nii_dset10():
@@ -345,8 +335,4 @@ def test_mrd2nii_dset10():
     assert np.allclose(nii_reorient.get_fdata(), nii_expected.get_fdata(), atol=1)
     fname_expected_json = os.path.join(path_dataset, "nii", f"{file_name_expected_nii}.json")
     fname_json = os.path.join(path_output, f"{file_name_converted_nii}.json")
-    verify_sidecar(fname_json, fname_expected_json, skip_tags=["SeriesDescription", "ImageType", "BaseResolution",
-                                                               "ShimSetting", "ReceiveCoilName", "CoilString",
-                                                               "PulseSequenceDetails", "ConsistencyInfo",
-                                                               "PhaseEncodingSteps", "DerivedVendorReportedEchoSpacing",
-                                                               "RefLinesPE", "MRAcquisitionType"])
+    verify_sidecar(fname_json, fname_expected_json, skip_tags=["ImageType"], measyaps=False)
