@@ -33,7 +33,7 @@ def create_bids_sidecar(metadata, volume_images, dim_info=(None, None, None)):
         "PatientPosition": metadata.measurementInformation.patientPosition.value,
         # "ProcedureStepDescription": "",
         "SoftwareVersions": "",
-        "MRAcquisitionType": "",
+        "MRAcquisitionType": extract_acq_type(metadata),
         # "StudyDescription": "",
         "SeriesDescription": img_metas[0].get("SequenceDescription"),
         "ProtocolName": metadata.measurementInformation.protocolName,
@@ -51,10 +51,10 @@ def create_bids_sidecar(metadata, volume_images, dim_info=(None, None, None)):
         # "ImageComments": "",
         "SliceThickness": volume_images[0].getHead().field_of_view[2],
         "SpacingBetweenSlices": img_metas[0].get("SpacingBetweenSlices"),
-        "TablePosition": [],
+        "TablePosition": extract_table_position(volume_images[0]),
         "EchoNumber": img_metas[0].get("EchoNumber") if metadata.encoding[0].encodingLimits.contrast.maximum > 0 else None,
-        "EchoTime": None,
-        "RepetitionTime": None,
+        "EchoTime": extract_te(metadata, volume_images),
+        "RepetitionTime": extract_tr(metadata),
         # "MTState": "",
         "FlipAngle": metadata.sequenceParameters.flipAngle_deg[0],
         # "PartialFourier": "",
@@ -84,11 +84,11 @@ def create_bids_sidecar(metadata, volume_images, dim_info=(None, None, None)):
         "ParallelReductionFactorOutOfPlane": None,
         # "ParallelAcquisitionTechnique": "",
         # "EffectiveEchoSpacing": None,
-        "DerivedVendorReportedEchoSpacing": None,
+        "DerivedVendorReportedEchoSpacing": extract_vendor_echo_spacing(metadata),
         # "AcquisitionDuration": None,
         # "TotalReadoutTime": None,
         # "PixelBandwidth": None,
-        "DwellTime": None,
+        "DwellTime": extract_dwell_time(metadata),
         "PhaseEncodingDirection": "",
         "SliceTiming": [],
         "ImageOrientationPatientDICOM": extract_image_orientation_patient_dicom(volume_images[0]),
@@ -98,13 +98,6 @@ def create_bids_sidecar(metadata, volume_images, dim_info=(None, None, None)):
 
     # sidecar["SliceTiming"] = extract_slice_timing(metadata, volume_images)
     sidecar["SliceTiming"] = extract_slice_timing_ice_mini_hdr(metadata, img_metas, volume_images)
-    sidecar["EchoTime"] = extract_te(metadata, volume_images)
-    sidecar["RepetitionTime"] = extract_tr(metadata)
-    sidecar["DerivedVendorReportedEchoSpacing"] = extract_vendor_echo_spacing(metadata)
-    sidecar["DwellTime"] = extract_dwell_time(metadata)
-    sidecar["MRAcquisitionType"] = extract_acq_type(metadata)
-
-    sidecar["TablePosition"] = extract_table_position(volume_images[0])
 
     if metadata.encoding[0].parallelImaging.accelerationFactor.kspace_encoding_step_1 != 1:
         sidecar["ParallelReductionFactorInPlane"] = metadata.encoding[0].parallelImaging.accelerationFactor.kspace_encoding_step_1
@@ -116,6 +109,7 @@ def create_bids_sidecar(metadata, volume_images, dim_info=(None, None, None)):
     else:
         sidecar.pop("ParallelReductionFactorOutOfPlane")
 
+    # Available with Meas param set and MeasYaps
     measyaps, dicom = read_vendor_header_metadata(metadata)
     if measyaps is not None:
         sidecar["ScanOptions"] = extract_scan_options(metadata, measyaps)
@@ -129,12 +123,12 @@ def create_bids_sidecar(metadata, volume_images, dim_info=(None, None, None)):
             sidecar.pop("RefLinesPE")
         else:
             sidecar["RefLinesPE"] = int(measyaps["sPat"].get("lRefLinesPE"))
-        sidecar['PhaseEncodingDirection'] = extract_phase_encoding_direction(volume_images[0], measyaps, dim_info)
+        sidecar["PhaseEncodingDirection"] = extract_phase_encoding_direction(volume_images[0], measyaps, dim_info)
 
+    # Available with MEAS param set
     if dicom is not None:
         sidecar["InstitutionAddress"] = dicom.get("InstitutionAddress")
         sidecar["SoftwareVersions"] = dicom.get("SoftwareVersions")
-
 
     # Todo: GRAPPA: sPat['ucPATMode']. Need to verify what a sense scan does
 
@@ -748,7 +742,7 @@ def extract_te(metadata, volume_images):
         if contrast is None:
             contrast = image.getHead().contrast
         elif contrast != image.getHead().contrast:
-            raise RuntimeError("Multiple contrasts fed to extract_te()")
+            raise RuntimeError("Multiple contrasts in extract_te()")
         else:
             pass
 
