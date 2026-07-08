@@ -487,13 +487,12 @@ def parse_xproto(head: str, array_data=None):
                     if array_data is not None:
                         idxs = find_matching_brackets(array_data, array_end + 1)
                         if idxs is None:
-                            raise RuntimeError("Not the same amount of data in array and header")
+                            if array_data[array_end + 1:].strip().strip("\n") != "":
+                                logger.warning(f"Not the same amount of data in array and header. header: {value}, array: {array_data[array_end + 1:]}")
                         else:
                             array_start, array_end = idxs
-                        array = array_data[array_start:array_end]
-                        array_list.append(parse_xproto(new_head, array))
-                    else:
-                        array_list.append(parse_xproto(new_head, value))
+                            value = array_data[array_start:array_end]
+                    array_list.append(parse_xproto(new_head, value))
                 if len(array_list) > 1:
                     output = array_list
                 else:
@@ -510,7 +509,7 @@ def parse_xproto(head: str, array_data=None):
             return output
 
         except Exception as e:
-            logger.warning(f"Failed to parse ParamArray:{head}")
+            logger.warning(f"Failed to parse ParamArray:{head}. Error: {e}")
             return []
 
     def extract_param_type_and_name(siemens_hdr_name: str):
@@ -529,7 +528,7 @@ def parse_xproto(head: str, array_data=None):
 
     def find_matching_brackets(head, start_from=0):
         idx_start_value = head.find("{", start_from) + 1
-        if idx_start_value == -1:
+        if idx_start_value == 0:
             return
         bracket_running_open_close = 1
         idx = idx_start_value
@@ -573,11 +572,15 @@ def parse_xproto(head: str, array_data=None):
 
         return idx_start_name, idx_end_name, idx_start_value, idx_end_value
 
+    if array_data is not None and array_data.strip() == "":
+        array_data = None
+
     parsed = {}
     idx_master = 0
     idx_start_array = 0
     idx_end_array = 1
-    while len(head.strip().strip("\n")) > idx_master:
+    head = head.strip().strip("\n").strip("\x00")
+    while len(head) > idx_master + 1:
         idxs = find_idxs_of_tags(head, idx_master)
         if idxs is None:
             return head.strip()
