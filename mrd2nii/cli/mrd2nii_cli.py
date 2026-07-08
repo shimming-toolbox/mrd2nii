@@ -25,7 +25,7 @@ def mrd2nii_int(path_mrd, path_output, verbose):
     set_all_loggers(verbose)
 
     if not os.path.exists(path_mrd):
-        raise FileNotFoundError(f"Output folder does not exist: {path_mrd}")
+        raise FileNotFoundError(f"Input folder does not exist: {path_mrd}")
 
     if os.path.isdir(path_mrd):
         list_files = os.listdir(path_mrd)

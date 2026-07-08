@@ -336,3 +336,32 @@ def test_mrd2nii_dset10():
     fname_expected_json = os.path.join(path_dataset, "nii", f"{file_name_expected_nii}.json")
     fname_json = os.path.join(path_output, f"{file_name_converted_nii}.json")
     verify_sidecar(fname_json, fname_expected_json, skip_tags=["ImageType"], measyaps=False)
+
+
+def test_mrd2nii_meas(caplog):
+    """GRE with Meas data structure and custom coil"""
+    path_dataset = os.path.join(__dir_testing__, "dset_meas2")
+    # Define the path to the MRD file and output directory
+    path_mrd = os.path.join(path_dataset, "mrd")
+    path_output = os.path.join(path_dataset, "mrd2nii")
+    if os.path.exists(path_output):
+        shutil.rmtree(path_output)
+
+    runner = CliRunner()
+
+    res = runner.invoke(mrd2nii_int,
+                        [
+                            '--input', path_mrd,
+                            '--output', path_output
+                        ],
+                        catch_exceptions=False)
+
+    assert res.exit_code == 0, f"Error: {res.exit_code} - {res.output}"
+    assert "Error" not in caplog.text
+    file_name_converted_nii = "3000016_gre_fmap_baseline_RR_magnitude_echo-1"
+    nii = nib.load(os.path.join(path_output, f"{file_name_converted_nii}.nii.gz"))
+    assert nii.header.get_dim_info()[2] == 2
+    file_name_expected_json = "3000016_gre_fmap_baseline_RR_magnitude_echo-1.json"
+    fname_expected_json = os.path.join(path_dataset, "nii", file_name_expected_json)
+    fname_json = os.path.join(path_output, f"{file_name_converted_nii}.json")
+    verify_sidecar(fname_json, fname_expected_json, meas=True)
