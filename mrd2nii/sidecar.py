@@ -216,11 +216,13 @@ def extract_shim_settings(vhdr_metadata):
     for i in range(5):
         if vhdr_metadata["sGRADSPEC"].get(f"alShimCurrent[{i}]") is not None:
             shim_settings.append(int(vhdr_metadata["sGRADSPEC"][f"alShimCurrent[{i}]"]))
-            continue
-        if vhdr_metadata["sGRADSPEC"].get("alShimCurrent") is not None:
-            shim_settings.append(int(vhdr_metadata["sGRADSPEC"]["alShimCurrent"][i]))
-            continue
-        shim_settings.append(None)
+        elif vhdr_metadata["sGRADSPEC"].get("alShimCurrent") is not None:
+            if not isinstance(vhdr_metadata["sGRADSPEC"]["alShimCurrent"], list):
+                shim_settings.append(None)
+            else:
+                shim_settings.append(int(vhdr_metadata["sGRADSPEC"]["alShimCurrent"][i]))
+        else:
+            shim_settings.append(None)
 
     # If it's an array of None, return empty list
     if np.all([s is None for s in shim_settings]):
