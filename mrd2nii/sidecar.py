@@ -383,7 +383,8 @@ def parse_xproto(head: str, array_data=None):
 
         if array_value is not None:
             val = _parse_data(array_value, type)
-            logger.debug(f"Array value found {val} vs value found: {value}")
+            if val != value and value != default_value[type]:
+                logger.debug(f"Array value found {val} vs value found: {value}")
             value = val
 
         return value
@@ -667,9 +668,27 @@ def read_vendor_header_metadata(metadata):
     # - SiemensBuffer_PROTOCOL_MeasYaps
     # - SiemensBuffer_PROTOCOL_Phoenix
     # - SiemensBuffer_PROTOCOL_Meas
+
+    headers_to_read = []
+    header_names = []
+    for param in metadata.userParameters.userParameterBase64:
+        header_names.append(param.name)
+
+    # Read Meas if both Meas and MeasYaps are both are present
+    if "SiemensBuffer_PROTOCOL_Meas" in header_names:
+        headers_to_read.append("SiemensBuffer_PROTOCOL_Meas")
+    if "SiemensBuffer_PROTOCOL_MeasYaps" in header_names and not "SiemensBuffer_PROTOCOL_Meas" in header_names:
+        headers_to_read.append("SiemensBuffer_PROTOCOL_MeasYaps")
+
+    if "SiemensBuffer_PROTOCOL_Phoenix" in header_names:
+        headers_to_read.append("SiemensBuffer_PROTOCOL_Phoenix")
+
     measyaps = None
     dicom = None
+
     for param in metadata.userParameters.userParameterBase64:
+        if param.name not in headers_to_read:
+            continue
         if param.name == "SiemensBuffer_PROTOCOL_MeasYaps":
             logger.debug("MeasYaps protocol found, trying to parse")
             measyaps = read_measyaps(param.value)
@@ -679,7 +698,6 @@ def read_vendor_header_metadata(metadata):
         if param.name == "SiemensBuffer_PROTOCOL_Meas":
             logger.debug("Meas protocol found")
             head_dict = parse_xproto(str(param.value.decode('utf-8')))
-            # merge 2 dicts
             measyaps = head_dict["XProtocol"][""]["MEAS"] | head_dict["XProtocol"][""]["YAPS"]
             dicom = head_dict["XProtocol"][""]["DICOM"]
 

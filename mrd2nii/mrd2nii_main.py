@@ -277,7 +277,7 @@ def mrd2nii_volume(metadata, volume_images, skip_sidecar=False):
 
 def mrd2nii_stack(metadata, image, include_slice_gap=True):
     header = image.getHead()
-    logger.debug(header)
+    # logger.debug(header)
 
     # Extract ordering
     nb_slices = header.matrix_size[-1]
