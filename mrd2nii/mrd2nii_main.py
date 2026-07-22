@@ -17,12 +17,14 @@ from mrd2nii.sidecar import create_bids_sidecar, read_vendor_header_img, get_mai
 logger = logging.getLogger(__name__)
 
 
-def mrd2nii_dset(dset: ismrmrd.Dataset, output_dir):
+
+def mrd2nii_dset(dset: ismrmrd.Dataset, output_dir, rescale=True):
     """Convert MRD file to NIfTI format.
 
     Args:
         dset (ismrmrd.Dataset): Dataset.
         output_dir (str): Directory to save the output NIfTI file.
+        rescale (bool): Whether to rescale the images.
 
     Returns:
         None
@@ -83,7 +85,7 @@ def mrd2nii_dset(dset: ismrmrd.Dataset, output_dir):
         logger.info(f"Converting {acq_name} to NIfTI")
 
         # Convert to NIfTI
-        nii, sidecar = mrd2nii_volume(metadata, volume_images)
+        nii, sidecar = mrd2nii_volume(metadata, volume_images, rescale=rescale)
 
         # Save NIfTI file
         fname_nii = os.path.join(output_dir, f"{acq_name}.nii.gz")
@@ -213,7 +215,19 @@ def save_waveform_log_file(logfile_id, trace_ids, trace_names, data_wav, fname_o
             f.write("\n")
 
 
-def mrd2nii_volume(metadata, volume_images, skip_sidecar=False):
+def mrd2nii_volume(metadata, volume_images, skip_sidecar=False, rescale=True):
+    """
+
+    Args:
+        metadata (ismrmrd.xsd.ismrmrdHeader): Header from the MRD file
+        volume_images (list): List of ismrmrd.image.Image objects that belong to the same volume
+        skip_sidecar (bool): Whether to skip the creation of the BIDS sidecar JSON file.
+        rescale (bool): Whether to rescale the images.
+
+    Returns:
+        nib.Nifti1Image: The NIfTI image
+        dict: The BIDS sidecar JSON data
+    """
     logger.debug(volume_images[0].getHead())
 
     # Make sure all slices have the same rotation matrix
@@ -240,7 +254,7 @@ def mrd2nii_volume(metadata, volume_images, skip_sidecar=False):
     # Process the first volume to get nii metadata and dimensions
     nii_volume = None
     for i, volume_image in enumerate(images_by_rep_number[0]):
-        nii_stack = mrd2nii_stack(metadata, volume_image, include_slice_gap=True)
+        nii_stack = mrd2nii_stack(metadata, volume_image, include_slice_gap=True, rescale=rescale)
         nii_volume = merge_stacks_into_volume(nii_volume, nii_stack)
 
     # If there are many repetitions
@@ -254,7 +268,7 @@ def mrd2nii_volume(metadata, volume_images, skip_sidecar=False):
         for rep in tqdm(range(1, len(images_by_rep_number))):
             nii_volume = None
             for i, volume_image in enumerate(images_by_rep_number[rep]):
-                nii_stack = mrd2nii_stack(metadata, volume_image, include_slice_gap=True)
+                nii_stack = mrd2nii_stack(metadata, volume_image, include_slice_gap=True, rescale=rescale)
                 nii_volume = merge_stacks_into_volume(nii_volume, nii_stack)
             data[..., rep] = np.asarray(nii_volume.dataobj)
 
@@ -275,7 +289,19 @@ def mrd2nii_volume(metadata, volume_images, skip_sidecar=False):
     return nii, sidecar
 
 
-def mrd2nii_stack(metadata, image, include_slice_gap=True):
+def mrd2nii_stack(metadata, image, include_slice_gap=True, rescale=True):
+    """ Convert a single MRD image into a NIfTI file
+
+    Args:
+        metadata (ismrmrd.xsd.ismrmrdHeader): Header from the MRD file
+        image (ismrmrd.image.Image): The MRD image to convert
+        include_slice_gap (bool): Whether to include slice gap in the NIfTI file
+        rescale (bool): Whether to rescale the image data. Looks into if image.meta.RescaleSlope and
+                        image.meta.RescaleIntercept are defined.
+
+    Returns:
+        nib.Nifti1Image: The NIfTI image
+    """
     header = image.getHead()
     # logger.debug(header)
 
@@ -373,6 +399,12 @@ def mrd2nii_stack(metadata, image, include_slice_gap=True):
         data[0, :, :] = datatmp
     else:
         raise RuntimeError("Slice direction not recognized")
+
+    # Rescale if appropriate
+    if rescale and image.meta.get("RescaleSlope") is not None and image.meta.get("RescaleIntercept") is not None:
+        rescale_slope = float(image.meta.get("RescaleSlope"))
+        rescale_intercept = float(image.meta.get("RescaleIntercept"))
+        data = rescale_slope * data + rescale_intercept
 
     nii_tmp = nib.Nifti1Image(data, affine=affine)
     nii_tmp.header.set_dim_info(*mrd_dims_to_nii_dims)

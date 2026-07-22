@@ -365,3 +365,59 @@ def test_mrd2nii_meas(caplog):
     fname_expected_json = os.path.join(path_dataset, "nii", file_name_expected_json)
     fname_json = os.path.join(path_output, f"{file_name_converted_nii}.json")
     verify_sidecar(fname_json, fname_expected_json, meas=True)
+
+
+def test_mrd2nii_rescale():
+    """
+    'fieldmap_scaled.nii.gz' was computed from an input in FIRE in Hz, then converted to uint16 and outputted to MRD
+    with appropriate metadata to rescale to Hz, we feed that as input to mrd2nii and try to find the fieldmap back
+    """
+    path_dataset = os.path.join(__dir_testing__, "dset_rescale")
+    # Define the path to the MRD file and output directory
+    path_mrd = os.path.join(path_dataset, "mrd")
+    path_output = os.path.join(path_dataset, "mrd2nii")
+    if os.path.exists(path_output):
+        shutil.rmtree(path_output)
+
+    runner = CliRunner()
+
+    res = runner.invoke(mrd2nii_int,
+                        [
+                            '--input', path_mrd,
+                            '--output', path_output
+                        ],
+                        catch_exceptions=False)
+
+    assert res.exit_code == 0, f"Error: {res.exit_code} - {res.output}"
+    nii = nib.load(os.path.join(path_output, "77_gre_fmap_baseline_tra_rot_magnitude_echo-1.nii.gz"))
+    nii_expected = nib.load(os.path.join(path_dataset, "nii", "fieldmap_scaled.nii.gz"))
+    assert np.allclose(nii.get_fdata(), nii_expected.get_fdata(), atol=0.01)
+
+
+def test_mrd2nii_do_not_rescale():
+    """
+    Similar test to mrd2nii_rescale but here we use the --do-not-rescale option and make sure the output is different
+    """
+    path_dataset = os.path.join(__dir_testing__, "dset_rescale")
+    # Define the path to the MRD file and output directory
+    path_mrd = os.path.join(path_dataset, "mrd")
+    path_output = os.path.join(path_dataset, "mrd2nii")
+    if os.path.exists(path_output):
+        shutil.rmtree(path_output)
+
+    runner = CliRunner()
+
+    res = runner.invoke(mrd2nii_int,
+                        [
+                            '--input', path_mrd,
+                            '--output', path_output,
+                            '--do-not-rescale'
+                        ],
+                        catch_exceptions=False)
+
+    assert res.exit_code == 0, f"Error: {res.exit_code} - {res.output}"
+    nii = nib.load(os.path.join(path_output, "77_gre_fmap_baseline_tra_rot_magnitude_echo-1.nii.gz"))
+    assert nii.get_fdata().min() == np.iinfo(np.uint16).min
+    assert nii.get_fdata().max() == np.iinfo(np.uint16).max
+    nii_expected = nib.load(os.path.join(path_dataset, "nii", "fieldmap_not_scaled.nii.gz"))
+    assert np.allclose(nii.get_fdata(), nii_expected.get_fdata())

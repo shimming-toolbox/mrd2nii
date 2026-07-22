@@ -48,10 +48,7 @@ def test_mrd2nii_siemens_gre_tra_rot_int():
             nii = nib.load(os.path.join(path_output, f"{file_name_converted_nii}.nii.gz"))
             nii_expected = nib.load(os.path.join(path_dataset, "nii", f"{file_name_expected_nii}.nii.gz"))
             assert np.allclose(nii.affine, nii_expected.affine)
-            if modality == "phase":
-                assert np.allclose(nii.get_fdata(), (nii_expected.get_fdata() + 4096) / 2, atol=1)
-            else:
-                assert np.allclose(nii.get_fdata(), nii_expected.get_fdata(), atol=1)
+            assert np.allclose(nii.get_fdata(), nii_expected.get_fdata(), atol=2)
             assert nii.header.get_dim_info()[2] == 2
             fname_expected_json = os.path.join(path_dataset, "nii", f"{file_name_expected_nii}.json")
             fname_json = os.path.join(path_output, f"{file_name_converted_nii}.json")
@@ -94,10 +91,7 @@ def test_mrd2nii_siemens_gre_sag_rot_int():
             nii = nib.load(os.path.join(path_output, f"{file_name_converted_nii}.nii.gz"))
             nii_expected = nib.load(os.path.join(path_dataset, "nii", f"{file_name_expected_nii}.nii.gz"))
             assert np.allclose(nii.affine, nii_expected.affine)
-            if modality == "phase":
-                assert np.allclose(nii.get_fdata(), (nii_expected.get_fdata() + 4096) / 2, atol=1)
-            else:
-                assert np.allclose(nii.get_fdata(), nii_expected.get_fdata(), atol=1)
+            assert np.allclose(nii.get_fdata(), nii_expected.get_fdata(), atol=2)
             assert nii.header.get_dim_info()[2] == 2
             fname_expected_json = os.path.join(path_dataset, "nii", f"{file_name_expected_nii}.json")
             fname_json = os.path.join(path_output, f"{file_name_converted_nii}.json")
@@ -140,10 +134,7 @@ def test_mrd2nii_siemens_gre_cor_rot_int():
             nii = nib.load(os.path.join(path_output, f"{file_name_converted_nii}.nii.gz"))
             nii_expected = nib.load(os.path.join(path_dataset, "nii", f"{file_name_expected_nii}.nii.gz"))
             assert np.allclose(nii.affine, nii_expected.affine)
-            if modality == "phase":
-                assert np.allclose(nii.get_fdata(), (nii_expected.get_fdata() + 4096) / 2, atol=1)
-            else:
-                assert np.allclose(nii.get_fdata(), nii_expected.get_fdata(), atol=1)
+            assert np.allclose(nii.get_fdata(), nii_expected.get_fdata(), atol=2)
             assert nii.header.get_dim_info()[2] == 2
             fname_expected_json = os.path.join(path_dataset, "nii", f"{file_name_expected_nii}.json")
             fname_json = os.path.join(path_output, f"{file_name_converted_nii}.json")
