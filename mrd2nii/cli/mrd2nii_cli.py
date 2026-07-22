@@ -19,9 +19,12 @@ logger = logging.getLogger(__name__)
               help="Input path to MRD folder/file")
 @click.option('-o', '--output', 'path_output', type=click.Path(), required=True,
               help="Path to output folder")
+@click.option('-r', '--do-not-rescale', 'dont_rescale', is_flag=True, required=False, show_default=True,
+              help="Do not rescale the images according to RescaleSlope and RescaleIntercept. Omit the option to "
+                   "rescale the images.")
 @click.option('-v', '--verbose', type=click.Choice(['info', 'debug']), default='info',
               help="Be more verbose")
-def mrd2nii_int(path_mrd, path_output, verbose):
+def mrd2nii_int(path_mrd, path_output, dont_rescale, verbose):
     set_all_loggers(verbose)
 
     if not os.path.exists(path_mrd):
@@ -43,7 +46,7 @@ def mrd2nii_int(path_mrd, path_output, verbose):
 
         n_files_converted += 1
         dset = ismrmrd.Dataset(os.path.join(path_mrd, file), dataset_name="dataset", create_if_needed=False)
-        mrd2nii_dset(dset, path_output)
+        mrd2nii_dset(dset, path_output, rescale=not dont_rescale)
         dset.close()
 
     if n_files_converted <= 0:
