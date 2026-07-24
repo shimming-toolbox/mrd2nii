@@ -110,7 +110,7 @@ def create_bids_sidecar(metadata, volume_images, dim_info=(None, None, None)):
         sidecar.pop("ParallelReductionFactorOutOfPlane")
 
     # Available with Meas param set and MeasYaps
-    measyaps, dicom = read_vendor_header_metadata(metadata)
+    measyaps, dicom, _ = read_vendor_header_metadata(metadata)
     if measyaps is not None:
         sidecar["ScanOptions"] = extract_scan_options(metadata, measyaps)
         sidecar["PulseSequenceDetails"] = measyaps.get("tSequenceFileName")
@@ -365,13 +365,24 @@ def parse_xproto(head: str, array_data=None):
                             return None
 
                     value = []
-                    vals = data.split(" ")
+                    default = None
+                    vals = iter(data.split(" "))
+                    precision = None
                     for i_val, val in enumerate(vals):
                         if val.strip().strip("\n") == "<Default>":
-                            value = type_conversion[type](vals[i_val + 1])
-                            break
+                            default = type_conversion[type](next(vals, None))
+                            continue
+                        if val.strip().strip("\n") == "<Precision>":
+                            precision = type_conversion[type](next(vals, None))
+                            continue
                         if val.strip().strip("\n") != "":
                             value.append(type_conversion[type](val.strip().strip("\n")))
+                    if default is not None and value == []:
+                        value = default
+                    if precision is not None:
+                        logger.debug(f"value: {value}")
+                        logger.debug(f"Precision: {precision}")
+
                 else:
                     value = type_conversion[type](data)
             else:
@@ -392,29 +403,35 @@ def parse_xproto(head: str, array_data=None):
 
     def parse_choice(head):
         head = head.strip().strip("\n")
-        if "<Limit>" not in head[:7]:
+        if head.find("<Limit>") == -1:
             raise RuntimeError("No Limit tag in ParamChoice")
 
-        idx_open = head.find("{")
-        idx_close = head.find("}")
+        idx_start = head.find("<Limit>")
+        idx_open = head.find("{", idx_start + len("<Limit>"))
+        idx_close = head.find("}", idx_open)
+
         if idx_open == -1 or idx_close == -1:
             raise RuntimeError("No opening or closing bracket in ParamChoice")
         limit = parse_list_of_strings(head[idx_open + 1:idx_close])
 
-        head = head[idx_close + 1:].strip()
+        head = head[:idx_start] + head[idx_close + 1:]
+        head = head.strip().strip("\n")
 
-        if head.find("<Default>") == -1:
-            raise RuntimeError("No Default tag in ParamChoice")
+        if head.find("<Default>") != -1:
+            idx_start = head.find("<Default>")
+            idx_end = head.find("\n", idx_start)
+            default_value = head.strip()[idx_start+len("<Default>"):idx_end].strip().strip("\"")
+            value = default_value
+        else:
+            default_value = None
+            value = head.strip(f"\"").strip()
 
-        head = head.strip("<Default>")
-        end_idx = head.find("\n")
-        default_value = head.strip()[1:end_idx].strip()
-
-        if head.strip(f"\"{default_value}\"").strip() != "":
-            raise RuntimeError("Extra information after Default tag in ParamChoice")
+        if value not in limit:
+            raise RuntimeError(f"Value {value} not in paramChoice options")
 
         return {
             "Limit": limit,
+            "value": value,
             "Default": default_value
         }
 
@@ -432,28 +449,22 @@ def parse_xproto(head: str, array_data=None):
     def parse_array(head: str, array_data=None):
         try:
             head = head.strip().strip("\n")
-            if "<DefaultSize>" not in head[:13]:
-                raise RuntimeError("No DefaultSize tag in ParamArray")
+            if "<DefaultSize>" in head[:13]:
+                head = head.strip("<DefaultSize>")
+                ind = head.find("\n")
+                if ind == -1:
+                    raise RuntimeError("No new line after DefaultSize tag in ParamArray")
+                default_size = int(head[:ind].strip())
+                head = head[ind:].strip()
 
-            head = head.strip("<DefaultSize>")
-            ind = head.find("\n")
-            if ind == -1:
-                raise RuntimeError("No new line after DefaultSize tag in ParamArray")
+            if "<MaxSize>" in head[:9]:
+                head = head.strip("<MaxSize>")
+                ind = head.find("\n")
+                if ind == -1:
+                    raise RuntimeError("No new line after MaxSize tag in ParamArray")
+                max_size = int(head[:ind].strip())
+                head = head[ind:].strip()
 
-            default_size = int(head[:ind].strip())
-
-            head = head[ind:].strip()
-            if "<MaxSize>" not in head[:9]:
-                raise RuntimeError("No MaxSize tag in ParamArray")
-
-            head = head.strip("<MaxSize>")
-            ind = head.find("\n")
-            if ind == -1:
-                raise RuntimeError("No new line after MaxSize tag in ParamArray")
-
-            max_size = int(head[:ind].strip())
-
-            head = head[ind:].strip()
             if "<Default>" not in head[:9]:
                 raise RuntimeError("No Default tag in ParamArray")
             head = head.strip("<Default>").strip()
@@ -505,10 +516,54 @@ def parse_xproto(head: str, array_data=None):
                 output = head
             elif "<ParamLong.\"\">" in head[:14]:
                 output = head
+                # idxs = find_matching_brackets(head)
+                # if idxs is None:
+                #     raise RuntimeError("No matching brackets found in ParamArray (header)")
+                # idx_start, idx_end = idxs
+                # if head[idx_start:idx_end].strip()== "":
+                #     output = None
+                # else:
+                #     output = parse_data(head[idx_start:idx_end].strip(), "long", array_data)
             elif "<ParamArray.\"\">" in head[:15]:
                 output = head
+            elif "<ParamBool.\"\">" in head[:14]:
+                output = head
+            elif "<ParamChoice.\"\">" in  head[:16]:
+                idxs = find_matching_brackets(head)
+                if idxs is None:
+                    raise RuntimeError("No matching brackets found in ParamArray (header)")
+                idx_start, idx_end = idxs
+                choice = parse_choice(head[idx_start:idx_end])
+
+                array_list = []
+                more_elements = True
+                value_end = idx_end
+                while more_elements:
+                    if head[value_end + 1:] == "":
+                        break
+                    idxs = find_matching_brackets(head, value_end + 1)
+                    if idxs is None:
+                        raise RuntimeError("No idx found")
+
+                    value_start, value_end = idxs
+                    val = head[value_start:value_end].strip().strip("\"")
+                    if val == "":
+                        value = choice.get("Default")
+                    else:
+                        value = val
+
+                    if array_data is not None:
+                        logger.warning("Non empty array in param choice array")
+
+                    array_list.append(value)
+
+                if len(array_list) > 1:
+                    output = array_list
+                else:
+                    output = array_list[0]
+
             else:
-                raise RuntimeError("No ParamString or ParamMap tag in ParamArray")
+                raise RuntimeError(f"Param type not recognized in ParamArray {head}")
 
             return output
 
@@ -562,7 +617,7 @@ def parse_xproto(head: str, array_data=None):
 
     def find_idxs_of_tags(head, idx_master=0):
         idx_start_name = head.find("<", idx_master) + 1
-        if idx_start_name == -1:
+        if idx_start_name == 0:
             return
         idx_end_name = head.find(">", idx_master)
         if idx_end_name == -1:
@@ -570,24 +625,101 @@ def parse_xproto(head: str, array_data=None):
 
         idxs = find_matching_brackets(head, idx_master)
         if idxs is None:
-            return
+            return idx_start_name, idx_end_name, idx_end_name + 1, len(head) -1
 
         idx_start_value, idx_end_value = idxs
+
+        # Look if a new name opens before a new value opens
+        idx_new_start_name = head.find("<", idx_end_name + 1)
+        if idx_new_start_name != -1 and idx_new_start_name < idx_start_value:
+            return idx_start_name, idx_end_name, idx_end_name + 1, idx_new_start_name
 
         return idx_start_name, idx_end_name, idx_start_value, idx_end_value
 
     if array_data is not None and array_data.strip() == "":
         array_data = None
 
+    def parse_ascconv(head):
+        # Look if ASCCONV is in there, parse it and remove it
+        idx_start_asc = head.find("### ASCCONV BEGIN ")
+        idx_end_asc = head.find("### ASCCONV END ###")
+        if idx_start_asc == -1 or idx_end_asc == -1:
+            return None
+
+        # Parse header
+        idx_start_header = idx_start_asc + len("### ASCCONV BEGIN ")
+        idx_end_header = head.find("###", idx_start_header)
+        header = head[idx_start_header:idx_end_header]
+
+        def get_ascconv_values(data):
+            data = data.strip()
+            parsed_single_depth = {}
+            idx = 0
+            while idx < len(data):
+                ids_start = idx
+                idx_eq = data.find("=", idx)
+                if idx_eq == -1:
+                    raise RuntimeError("No equal sign found in ASCCONV header")
+                idx_newline = data.find("\n", idx_eq)
+                if idx_newline == -1:
+                    # Look if there is another param to parse
+                    idx_nexteq = data.find("=", idx_eq + 1)
+                    if idx_nexteq == -1:
+                        idx_end = len(data)
+                    else:
+                        # Look for the next space after the equal sign (header)
+                        idx_space = data.find(" ", idx_eq)
+                        if idx_space == -1:
+                            idx_space = len(data)
+                        idx_end = idx_space
+                else:
+                    idx_end = idx_newline
+
+                param_name = data[ids_start:idx_eq]
+                param_value = data[idx_eq + 1:idx_end]
+
+                parsed_single_depth[param_name.strip()] = param_value.strip()
+
+                idx = idx_end + 1
+
+            return parsed_single_depth
+
+        header_dict = get_ascconv_values(header)
+        idx_data_start = idx_end_header + len("###")
+        data = head[idx_data_start:idx_end_asc]
+        data_dict = get_ascconv_values(data)
+
+        parsed_full_depth = {"header": header_dict, "data": {}}
+        for keys in data_dict.keys():
+            param_value = data_dict[keys]
+            param_list = keys.split(".")
+            # Create nested dictionary based on the param_list
+            current_level = parsed_full_depth["data"]
+            for param in param_list[:-1]:
+                if param not in current_level:
+                    current_level[param] = {}
+                current_level = current_level[param]
+            current_level[param_list[-1]] = param_value
+
+        # Remove ### ASCCONV from data
+        head = head[:idx_start_asc] + head[idx_end_asc + len("### ASCCONV END ###"):]
+
+        return parsed_full_depth, head
+
     parsed = {}
+    ascconv = parse_ascconv(head)
+    if ascconv is not None:
+        parsed["ASCCONV"], head = ascconv
+
     idx_master = 0
     idx_start_array = 0
     idx_end_array = 1
-    head = head.strip().strip("\n").strip("\x00")
+    head = head.strip().strip("\n").strip("\x00").strip("\n")
     while len(head) > idx_master + 1:
         idxs = find_idxs_of_tags(head, idx_master)
         if idxs is None:
-            return head.strip()
+            parsed["cant parse"] = head[idx_master:].strip()
+            return parsed
         idx_start_name, idx_end_name, idx_start_value, idx_end_value = idxs
         param_type, param_name = extract_param_type_and_name(head[idx_start_name:idx_end_name])
 
@@ -598,8 +730,6 @@ def parse_xproto(head: str, array_data=None):
 
         value = head[idx_start_value:idx_end_value]
         array = array_data[idx_start_array:idx_end_array] if array_data is not None else None
-        if param_name in ["SliceInformation", "dInPlaneRot", "asGPAData"]:
-            pass
         if param_type == "ParamArray":
             parsed[param_name] = parse_array(value, array)
         elif param_type == "ParamMap":
@@ -629,10 +759,14 @@ def parse_xproto(head: str, array_data=None):
         elif param_type == "Connection":
             parsed[param_name] = value.strip("\n").strip()
         elif param_type == "ProtocolComposer":
-                parsed[param_name] = value.strip("\n").strip()
+            parsed[param_name] = value.strip("\n").strip()
         else:
-            parsed[param_name] = parse_xproto(value)
-        idx_master = idx_end_value + 1
+            if value.find("{") == -1:
+                # Special case
+                parsed[param_name] = value.strip("\n").strip()
+            else:
+                parsed[param_name] = parse_xproto(value)
+        idx_master = idx_end_value
         if array_data is not None:
             idx_start_array = idx_end_array + 1
 
@@ -641,8 +775,7 @@ def parse_xproto(head: str, array_data=None):
 
 def read_vendor_header_img(image):
     meta = ismrmrd.Meta.deserialize(image.attribute_string)
-    # logger.info(meta.keys())
-    # ['AcquisitionContrast', 'DistortionCorrection', 'EchoTime', 'FrameOfReference', 'IceImageControl', 'IceMiniHead', 'ImageColumnDir', 'ImageHistory', 'ImageRowDir', 'ImageSliceNormDir', 'ImageType', 'Keep_image_geometry', 'ReadPhaseSeqSwap', 'RepetitionTime', 'SequenceDescription', 'SlicePosLightMarker']
+
     vendor_header = None
     if 'IceMiniHead' in meta:
         vendor_header = base64.b64decode(meta['IceMiniHead']).decode('utf-8')
@@ -653,12 +786,6 @@ def read_vendor_header_img(image):
     head_dict = parse_xproto(vendor_header)
     head_dict = head_dict["XProtocol"][""]["DICOM"]
     # head_dict["XProtocol"][""]["CONTROL"] also exists but does not have much information
-    if head_dict.get('SliceNo') == '':
-        head_dict['SliceNo'] = 0
-    if head_dict.get('TimeAfterStart') == '':
-        head_dict['TimeAfterStart'] = 0
-    if head_dict.get('ProtocolSliceNumber') == '':
-        head_dict['ProtocolSliceNumber'] = 0
     return head_dict
 
 
@@ -680,12 +807,12 @@ def read_vendor_header_metadata(metadata):
         headers_to_read.append("SiemensBuffer_PROTOCOL_Meas")
     if "SiemensBuffer_PROTOCOL_MeasYaps" in header_names and not "SiemensBuffer_PROTOCOL_Meas" in header_names:
         headers_to_read.append("SiemensBuffer_PROTOCOL_MeasYaps")
-
     if "SiemensBuffer_PROTOCOL_Phoenix" in header_names:
         headers_to_read.append("SiemensBuffer_PROTOCOL_Phoenix")
 
     measyaps = None
     dicom = None
+    phoenix = None
 
     for param in metadata.userParameters.userParameterBase64:
         if param.name not in headers_to_read:
@@ -694,15 +821,14 @@ def read_vendor_header_metadata(metadata):
             logger.debug("MeasYaps protocol found, trying to parse")
             measyaps = read_measyaps(param.value)
         if param.name == "SiemensBuffer_PROTOCOL_Phoenix":
-            logger.warning("Phoenix protocol found, but not yet supported")
-            logger.debug(param.value)
+            phoenix = parse_xproto(str(param.value.decode('utf-8')))
         if param.name == "SiemensBuffer_PROTOCOL_Meas":
             logger.debug("Meas protocol found")
             head_dict = parse_xproto(str(param.value.decode('utf-8')))
             measyaps = head_dict["XProtocol"][""]["MEAS"] | head_dict["XProtocol"][""]["YAPS"]
             dicom = head_dict["XProtocol"][""]["DICOM"]
 
-    return measyaps, dicom
+    return measyaps, dicom, phoenix
 
 def read_measyaps(vendor_header):
     header_dict = {}
