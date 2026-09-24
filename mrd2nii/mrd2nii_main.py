@@ -12,7 +12,7 @@ import numpy as np
 import numpy.linalg as npl
 from tqdm import tqdm
 
-from mrd2nii.sidecar import create_bids_sidecar, read_vendor_header_img, get_main_dir
+from mrd2nii.sidecar import create_bids_sidecar, read_vendor_header_img, get_main_dir, get_spacing_between_slices
 
 logger = logging.getLogger(__name__)
 
@@ -251,10 +251,17 @@ def mrd2nii_volume(metadata, volume_images, skip_sidecar=False, rescale=True):
     if max(images_by_rep_number.keys()) != len(images_by_rep_number) - 1 or min(images_by_rep_number.keys()) != 0:
         raise ValueError("Repetition numbers should be consecutive and start from 0.")
 
+    # Figure out the slice gap
+    spacing_between_slices = get_spacing_between_slices(images_by_rep_number[0])
+
     # Process the first volume to get nii metadata and dimensions
     nii_volume = None
     for i, volume_image in enumerate(images_by_rep_number[0]):
-        nii_stack = mrd2nii_stack(metadata, volume_image, include_slice_gap=True, rescale=rescale)
+        nii_stack = mrd2nii_stack(metadata,
+                                  volume_image,
+                                  include_slice_gap=True,
+                                  rescale=rescale,
+                                  spacing_between_slices=spacing_between_slices)
         nii_volume = merge_stacks_into_volume(nii_volume, nii_stack)
 
     # If there are many repetitions
@@ -268,7 +275,11 @@ def mrd2nii_volume(metadata, volume_images, skip_sidecar=False, rescale=True):
         for rep in tqdm(range(1, len(images_by_rep_number))):
             nii_volume = None
             for i, volume_image in enumerate(images_by_rep_number[rep]):
-                nii_stack = mrd2nii_stack(metadata, volume_image, include_slice_gap=True, rescale=rescale)
+                nii_stack = mrd2nii_stack(metadata,
+                                          volume_image,
+                                          include_slice_gap=True,
+                                          rescale=rescale,
+                                          spacing_between_slices=spacing_between_slices)
                 nii_volume = merge_stacks_into_volume(nii_volume, nii_stack)
             data[..., rep] = np.asarray(nii_volume.dataobj)
 
@@ -289,7 +300,8 @@ def mrd2nii_volume(metadata, volume_images, skip_sidecar=False, rescale=True):
     return nii, sidecar
 
 
-def mrd2nii_stack(metadata, image, include_slice_gap=True, rescale=True):
+def mrd2nii_stack(metadata, image, include_slice_gap=True, rescale=True,
+                  spacing_between_slices=-1):
     """ Convert a single MRD image into a NIfTI file
 
     Args:
@@ -298,6 +310,8 @@ def mrd2nii_stack(metadata, image, include_slice_gap=True, rescale=True):
         include_slice_gap (bool): Whether to include slice gap in the NIfTI file
         rescale (bool): Whether to rescale the image data. Looks into if image.meta.RescaleSlope and
                         image.meta.RescaleIntercept are defined.
+        spacing_between_slices (float): If include_slice_gap is True, uses this value, otherwise try to calculate it
+                                        from the ice mini header
 
     Returns:
         nib.Nifti1Image: The NIfTI image
@@ -326,11 +340,20 @@ def mrd2nii_stack(metadata, image, include_slice_gap=True, rescale=True):
     fov = list(np.array(fov)[mrd_dims_to_nii_dims])
 
     if include_slice_gap:
-        vendor_header = read_vendor_header_img(image)
+        if spacing_between_slices > 0:
+            fov[nii_dims_to_mrd_dims[2]] = spacing_between_slices
+        else:
+            vendor_header = read_vendor_header_img(image)
+            if vendor_header is None:
+                logger.warning("No vendor header in image, cannot figure out if there is a slice gap")
+            else:
+                slice_gap = vendor_header.get('SpacingBetweenSlices')
+                if slice_gap is not None:
+                    if slice_gap != fov[nii_dims_to_mrd_dims[2]]:
+                        logger.warning("Slice gap is not the same as the z slice")
 
-        slice_gap = vendor_header.get('SpacingBetweenSlices')
-        if slice_gap is not None:
-            fov[nii_dims_to_mrd_dims[2]] = slice_gap
+                if slice_gap is not None:
+                    fov[nii_dims_to_mrd_dims[2]] = slice_gap
 
     pix_dim = [
         fov[0] / matrix[0],
