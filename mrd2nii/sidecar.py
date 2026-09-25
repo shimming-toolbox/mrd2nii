@@ -158,7 +158,9 @@ def create_bids_sidecar(metadata, volume_images, dim_info=(None, None, None)):
 def clean_up(sidecar):
     keys_to_remove = []
     for key, value in sidecar.items():
-        if value is None or value == "" or value == []:
+        if isinstance(value, list) and len(value) == 0:
+            keys_to_remove.append(key)
+        if value is None or value == "":
             keys_to_remove.append(key)
 
     for key in keys_to_remove:

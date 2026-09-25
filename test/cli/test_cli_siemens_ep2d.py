@@ -2,6 +2,8 @@
 # -*- coding: utf-8 -*
 
 from click.testing import CliRunner
+import glob
+import ismrmrd
 import nibabel as nib
 import numpy as np
 import os
@@ -813,3 +815,58 @@ def test_mrd2nii_siemens_ep2d_1slice_2vols():
     fname_expected_json = os.path.join(path_dataset, "nii", f"{file_name_expected_nii}.json")
     fname_json = os.path.join(path_output, f"{file_name_converted_nii}.json")
     verify_sidecar(fname_json, fname_expected_json, skip_tags=["PhaseEncodingSteps"])
+
+
+def test_mrd2nii_siemens_ep2d_tra_ap_int_no_ice_mini_hdr():
+    """Remove ice mini hdr from data and make sure it works"""
+
+    path_ref_dataset = os.path.join(__dir_testing__, "EP2D_TRA_AP_INT")
+    path_dataset = os.path.join(__dir_testing__, "EP2D_TRA_AP_INT_NO_MINI_HDR")
+    if os.path.exists(path_dataset):
+        shutil.rmtree(path_dataset)
+    shutil.copytree(path_ref_dataset, path_dataset)
+
+    # Define the path to the MRD file and output directory
+    path_mrd = os.path.join(path_dataset, "mrd")
+    path_output = os.path.join(path_dataset, "mrd2nii")
+
+    # Remove the ice mini header from the dataset
+    fname_mrd = glob.glob(os.path.join(path_mrd, "*.h5"))[0]
+    fname_mrd_modified = fname_mrd.replace(".h5", "_modified.h5")
+
+    with ismrmrd.Dataset(fname_mrd, dataset_name="dataset", create_if_needed=False) as dset:
+        with ismrmrd.Dataset(fname_mrd_modified, dataset_name="dataset", create_if_needed=True) as dset_mod:
+            xml_header = dset.read_xml_header()
+            dset_mod.write_xml_header(xml_header)
+
+            group = "images_0"
+            for i_img in range(0, dset.number_of_images(group)):
+                image = dset.read_image(group, i_img)
+                meta = ismrmrd.Meta.deserialize(image.attribute_string)
+                del meta["IceMiniHead"]
+                image.attribute_string = ismrmrd.Meta.serialize(meta)
+
+                dset_mod.append_image(group, image)
+
+    os.remove(fname_mrd)
+
+    runner = CliRunner()
+
+    res = runner.invoke(mrd2nii_int,
+                        [
+                            '--input', path_mrd,
+                            '--output', path_output
+                        ],
+                        catch_exceptions=False)
+
+    assert res.exit_code == 0, f"Error: {res.exit_code} - {res.output}"
+    file_name_converted_nii = "113_ep2d_bold_ST_TRA_magnitude_echo-1"
+    file_name_expected_nii = "10_dicoms_ep2d_bold_ST_TRA_20250926122558"
+    nii = nib.load(os.path.join(path_output, f"{file_name_converted_nii}.nii.gz"))
+    nii_expected = nib.load(os.path.join(path_dataset, "nii", f"{file_name_expected_nii}.nii.gz"))
+    assert np.allclose(nii.affine, nii_expected.affine)
+    assert np.allclose(nii.get_fdata(), nii_expected.get_fdata(), atol=1)
+    assert nii.header.get_dim_info()[2] == 2
+    fname_expected_json = os.path.join(path_dataset, "nii", f"{file_name_expected_nii}.json")
+    fname_json = os.path.join(path_output, f"{file_name_converted_nii}.json")
+    verify_sidecar(fname_json, fname_expected_json, ice_mini_head=False)
