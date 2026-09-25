@@ -14,10 +14,9 @@ logger = logging.getLogger(__name__)
 
 def create_bids_sidecar(metadata, volume_images, dim_info=(None, None, None)):
 
-    # Parse Mini hdr
-    img_metas = []
-    for image in volume_images:
-        img_metas.append(read_vendor_header_img(image))
+    spacing_between_slices = get_spacing_between_slices(volume_images)
+    if spacing_between_slices < 0:
+        spacing_between_slices = ""
 
     sidecar = {
         "Modality": "MR",
@@ -35,24 +34,24 @@ def create_bids_sidecar(metadata, volume_images, dim_info=(None, None, None)):
         "SoftwareVersions": "",
         "MRAcquisitionType": extract_acq_type(metadata),
         # "StudyDescription": "",
-        "SeriesDescription": img_metas[0].get("SequenceDescription"),
+        "SeriesDescription": "",
         "ProtocolName": metadata.measurementInformation.protocolName,
         "ScanningSequence": extract_scanning_sequence(metadata),
         # "SequenceVariant": "",
         "ScanOptions": "",
-        "PulseSequenceName": img_metas[0].get("SequenceString"),
-        "ImageType": extract_image_type(img_metas[0]),
+        "PulseSequenceName": "",
+        "ImageType": [],
         # "ImageTypeText": [],
-        "NonlinearGradientCorrection": extract_non_lin_gradient_corr(img_metas[0]),
+        "NonlinearGradientCorrection": "",
         # "SeriesNumber": volume_images[0].getHead().measurement_uid, not right
         # "SeriesNumber": "",
-        "AcquisitionTime": extract_acq_time(img_metas[0]),
-        "AcquisitionNumber": img_metas[0].get("AcquisitionNumber"),
+        "AcquisitionTime": "",
+        "AcquisitionNumber": "",
         # "ImageComments": "",
         "SliceThickness": volume_images[0].getHead().field_of_view[2],
-        "SpacingBetweenSlices": img_metas[0].get("SpacingBetweenSlices"),
+        "SpacingBetweenSlices": spacing_between_slices,
         "TablePosition": extract_table_position(volume_images[0]),
-        "EchoNumber": img_metas[0].get("EchoNumber") if metadata.encoding[0].encodingLimits.contrast.maximum > 0 else None,
+        "EchoNumber": None,
         "EchoTime": extract_te(metadata, volume_images),
         "RepetitionTime": extract_tr(metadata),
         # "MTState": "",
@@ -63,23 +62,23 @@ def create_bids_sidecar(metadata, volume_images, dim_info=(None, None, None)):
         # "TxRefAmp": "",
         # "PhaseResolution": "",
         "ReceiveCoilName": "",
-        "ReceiveCoilActiveElements": img_metas[0].get("CoilString"),
+        "ReceiveCoilActiveElements": "",
         "CoilString": "",
         "PulseSequenceDetails": "",
         "RefLinesPE": None,
         # "CoilCombinationMethod": "",
         "ConsistencyInfo": "",
         # "MatrixCoilMode": "",
-        "PercentPhaseFOV": img_metas[0].get("PercentPhaseFoV"),
-        "PercentSampling": img_metas[0].get("PercentSampling"),
+        "PercentPhaseFOV": "",
+        "PercentSampling": "",
         # "EchoTrainLength": "",
         # "EchoTrainLength": img_metas[0].get("EchoTrainLength"), Does not work
         # "PartialFourierDirection": "",
-        "PhaseEncodingSteps": img_metas[0].get("NoOfPhaseEncodingSteps"),
+        "PhaseEncodingSteps": "",
         "FrequencyEncodingSteps": metadata.encoding[0].reconSpace.matrixSize.x,
         "AcquisitionMatrixPE": metadata.encoding[0].encodedSpace.matrixSize.y,
         "ReconMatrixPE": metadata.encoding[0].reconSpace.matrixSize.y,
-        "BandwidthPerPixelPhaseEncode": img_metas[0].get("BandwidthPerPixelPhaseEncode"),
+        "BandwidthPerPixelPhaseEncode": "",
         "ParallelReductionFactorInPlane": None,
         "ParallelReductionFactorOutOfPlane": None,
         # "ParallelAcquisitionTechnique": "",
@@ -96,8 +95,28 @@ def create_bids_sidecar(metadata, volume_images, dim_info=(None, None, None)):
         "ConversionSoftware": "mrd2nii"
     }
 
-    # sidecar["SliceTiming"] = extract_slice_timing(metadata, volume_images)
-    sidecar["SliceTiming"] = extract_slice_timing_ice_mini_hdr(metadata, img_metas, volume_images)
+    # Parse Mini hdr (Ice mini hdr in Siemens case)
+    img_metas = []
+    for image in volume_images:
+        img_metas.append(read_vendor_header_img(image))
+
+    mini_hdr = img_metas[0]
+    if mini_hdr is not None:
+        sidecar["SeriesDescription"] = mini_hdr.get("SequenceDescription")
+        sidecar["PulseSequenceName"] = mini_hdr.get("SequenceString")
+        sidecar["ImageType"] = extract_image_type(mini_hdr)
+        sidecar["NonlinearGradientCorrection"] = extract_non_lin_gradient_corr(mini_hdr)
+        sidecar["AcquisitionTime"] = extract_acq_time(mini_hdr)
+        sidecar["AcquisitionNumber"] = mini_hdr.get("AcquisitionNumber")
+        sidecar["EchoNumber"] = mini_hdr.get("EchoNumber") if metadata.encoding[0].encodingLimits.contrast.maximum > 0 else None
+        sidecar["ReceiveCoilActiveElements"] = mini_hdr.get("CoilString")
+        sidecar["PercentPhaseFOV"] = mini_hdr.get("PercentPhaseFoV")
+        sidecar["PercentSampling"] = mini_hdr.get("PercentSampling")
+        sidecar["PhaseEncodingSteps"] = mini_hdr.get("NoOfPhaseEncodingSteps")
+        sidecar["BandwidthPerPixelPhaseEncode"] = mini_hdr.get("BandwidthPerPixelPhaseEncode")
+
+        # sidecar["SliceTiming"] = extract_slice_timing(metadata, volume_images)
+        sidecar["SliceTiming"] = extract_slice_timing_ice_mini_hdr(metadata, img_metas, volume_images)
 
     if metadata.encoding[0].parallelImaging.accelerationFactor.kspace_encoding_step_1 != 1:
         sidecar["ParallelReductionFactorInPlane"] = metadata.encoding[0].parallelImaging.accelerationFactor.kspace_encoding_step_1
@@ -139,7 +158,9 @@ def create_bids_sidecar(metadata, volume_images, dim_info=(None, None, None)):
 def clean_up(sidecar):
     keys_to_remove = []
     for key, value in sidecar.items():
-        if value is None or value == "" or value == []:
+        if isinstance(value, list) and len(value) == 0:
+            keys_to_remove.append(key)
+        if value is None or value == "":
             keys_to_remove.append(key)
 
     for key in keys_to_remove:
@@ -273,6 +294,9 @@ def extract_table_position(image):
     # I have not found a good table position tag. Using the SlicePosLightMarker tag and the position seems to do the
     # trick
     # It looks like image.patient_table_position gives it in the table coordinate system
+    slice_pos_light_marker = image.meta.get('SlicePosLightMarker')
+    if slice_pos_light_marker is None:
+        return []
     return [0, 0, image.getHead().position[2] - float(image.meta.get('SlicePosLightMarker')[2])]
 
 
@@ -999,3 +1023,60 @@ def extract_n_encoding_directions(metadata):
                 metadata.encoding[0].encodingLimits.kspace_encoding_step_2.maximum == 0):
             cnt += 1
     return cnt
+
+
+def get_spacing_between_slices(volume_images):
+    """ Get the spacing between each slice (including the slice gap)
+
+    Args:
+        volume_images (list): List of ismrmrd.image.Image objects that belong to the same volume
+
+    Returns:
+        float: Spacing between slices in mm (-1 if it could not be figured out)
+
+    """
+    img_metas = []
+    for image in volume_images:
+        img_metas.append(read_vendor_header_img(image))
+
+    # First method uses the vendor header
+    spacing = -1
+    if img_metas is not None:
+        for meta in img_metas:
+            if meta is not None:
+                tmp_spacing = img_metas[0].get("SpacingBetweenSlices")
+                if tmp_spacing is not None and tmp_spacing != spacing:
+                    if spacing != -1:
+                        raise NotImplementedError(f"SpacingBetweenSlices is not the same for all slices: {tmp_spacing} vs {spacing}")
+                    else:
+                        spacing = tmp_spacing
+
+    if len(volume_images) == 1:
+        spacing_method2 = -1
+    else:
+        # Second method uses the slice positions
+        slice_pos = volume_images[0].getHead().position[:]
+        dist_from_other_slices = []
+        for i in range(1, len(volume_images)):
+            dist_from_other_slices.append(np.linalg.norm(np.array(volume_images[i].getHead().position[:]) - np.array(slice_pos)))
+
+        if math.isclose(min(dist_from_other_slices), 0):
+            # Remove 0
+            dist_from_other_slices = [d for d in dist_from_other_slices if not math.isclose(d, 0)]
+
+        if len(dist_from_other_slices) > 0:
+            spacing_method2 = min(dist_from_other_slices)
+        else:
+            spacing_method2 = -1
+
+    if spacing == -1 and spacing_method2 == -1:
+        spacing = -1
+    elif spacing == -1:
+        spacing = spacing_method2
+    elif spacing_method2 == -1:
+        pass
+    elif spacing_method2 != spacing:
+        logger.warning(f"SpacingBetweenSlices from vendor header ({spacing}) is different from spacing calculated from slice positions ({spacing_method2}). Using the vendor header value.")
+
+    return spacing
+
