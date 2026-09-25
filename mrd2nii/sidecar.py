@@ -315,6 +315,9 @@ def extract_scanning_sequence(metadata):
 
 
 def extract_device_serial_number(metadata):
+    if metadata.acquisitionSystemInformation.systemVendor != "Siemens":
+        return ""
+
     measurement_id = metadata.measurementInformation.measurementID
     if measurement_id.find("_") > 0:
         return measurement_id[:measurement_id.find("_")]
