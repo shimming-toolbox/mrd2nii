@@ -844,6 +844,7 @@ def test_mrd2nii_siemens_ep2d_tra_ap_int_no_ice_mini_hdr():
                 image = dset.read_image(group, i_img)
                 meta = ismrmrd.Meta.deserialize(image.attribute_string)
                 del meta["IceMiniHead"]
+                del meta["SlicePosLightMarker"]
                 image.attribute_string = ismrmrd.Meta.serialize(meta)
 
                 dset_mod.append_image(group, image)

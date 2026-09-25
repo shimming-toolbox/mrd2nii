@@ -294,6 +294,9 @@ def extract_table_position(image):
     # I have not found a good table position tag. Using the SlicePosLightMarker tag and the position seems to do the
     # trick
     # It looks like image.patient_table_position gives it in the table coordinate system
+    slice_pos_light_marker = image.meta.get('SlicePosLightMarker')
+    if slice_pos_light_marker is None:
+        return []
     return [0, 0, image.getHead().position[2] - float(image.meta.get('SlicePosLightMarker')[2])]
 
 
