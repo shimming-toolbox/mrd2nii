@@ -421,3 +421,51 @@ def test_mrd2nii_do_not_rescale():
     assert nii.get_fdata().max() == np.iinfo(np.uint16).max
     nii_expected = nib.load(os.path.join(path_dataset, "nii", "fieldmap_not_scaled.nii.gz"))
     assert np.allclose(nii.get_fdata(), nii_expected.get_fdata())
+
+
+def test_cli_relative_paths():
+    path_dataset = os.path.join(__dir_testing__, "dset1")
+    path_mrd = os.path.join(path_dataset, "mrd")
+    os.chdir(path_mrd)
+    path_output = os.path.join(path_dataset, "mrd2nii")
+    if os.path.exists(path_output):
+        shutil.rmtree(path_output)
+
+    runner = CliRunner()
+    res = runner.invoke(mrd2nii_int,
+                        [
+                            '--input', ".",
+                            '--output', "../mrd2nii"
+                        ],
+                        catch_exceptions=False)
+
+    assert res.exit_code == 0, f"Error: {res.exit_code} - {res.output}"
+    file_name_converted_nii = "155_ep2d_bold_shimming_magnitude_echo-1"
+    file_name_expected_nii = "093_dicoms_ep2d_bold_shimming_20250415120524"
+    nii = nib.load(os.path.join(path_output, f"{file_name_converted_nii}.nii.gz"))
+    nii_expected = nib.load(os.path.join(path_dataset, "nii", f"{file_name_expected_nii}.nii.gz"))
+    assert np.allclose(nii.affine, nii_expected.affine)
+
+
+def test_cli_relative_fname():
+    path_dataset = os.path.join(__dir_testing__, "dset1")
+    path_mrd = os.path.join(path_dataset, "mrd")
+    os.chdir(path_mrd)
+    path_output = os.path.join(path_dataset, "mrd2nii")
+    if os.path.exists(path_output):
+        shutil.rmtree(path_output)
+
+    runner = CliRunner()
+    res = runner.invoke(mrd2nii_int,
+                        [
+                            '--input', "ep2d_bold_shimming_2025-04-15-160334_93.h5",
+                            '--output', "../mrd2nii"
+                        ],
+                        catch_exceptions=False)
+
+    assert res.exit_code == 0, f"Error: {res.exit_code} - {res.output}"
+    file_name_converted_nii = "155_ep2d_bold_shimming_magnitude_echo-1"
+    file_name_expected_nii = "093_dicoms_ep2d_bold_shimming_20250415120524"
+    nii = nib.load(os.path.join(path_output, f"{file_name_converted_nii}.nii.gz"))
+    nii_expected = nib.load(os.path.join(path_dataset, "nii", f"{file_name_expected_nii}.nii.gz"))
+    assert np.allclose(nii.affine, nii_expected.affine)

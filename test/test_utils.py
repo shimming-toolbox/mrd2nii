@@ -8,7 +8,8 @@ TAGS_FROM_MRD_HEADER = [
     "SliceThickness",
     "TablePosition",
     "EchoTime",
-    "SliceTiming"
+    "SliceTiming",
+    "SpacingBetweenSlices"
 ]
 
 TAGS_FROM_DSET_METADATA = [
@@ -45,7 +46,6 @@ TAGS_FROM_IMAGE_META = [
 
 TAGS_FROM_ICE_MINI_HEADER = [
     "SeriesDescription",
-    "ImageType",
     "PulseSequenceName",
     "ImageType",
     "NonlinearGradientCorrection",

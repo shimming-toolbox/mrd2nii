@@ -33,7 +33,8 @@ def mrd2nii_int(path_mrd, path_output, dont_rescale, verbose):
     if os.path.isdir(path_mrd):
         list_files = os.listdir(path_mrd)
     elif os.path.isfile(path_mrd):
-        list_files = [path_mrd]
+        list_files = [os.path.basename(path_mrd)]
+        path_mrd = os.path.dirname(path_mrd)
     else:
         raise ValueError(f"Input path is neither a folder nor a file: {path_mrd}")
 
