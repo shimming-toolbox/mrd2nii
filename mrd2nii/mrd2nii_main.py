@@ -369,7 +369,8 @@ def mrd2nii_stack(metadata, image, include_slice_gap=True, rescale=True,
     if image.meta.get('SlicePosLightMarker') is not None:
         mid_voxel_coord = [float(i) for i in image.meta.get('SlicePosLightMarker')]
     else:
-        mid_voxel_coord = list(np.array(image.position))
+        raise ValueError("SlicePosLightMarker is not defined. Using image.position could yield to errors of the table position is not 0.")
+        # mid_voxel_coord = list(np.array(image.position))
 
     mid_voxel_index = np.array(matrix) / 2
     # Some adjustment through experimental testing (maybe due to where the (0,0,0) is defined?)
